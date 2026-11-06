@@ -61,7 +61,7 @@ test("several declarers are refused until --via names the one meant", async () =
 	f.link(f.otherFeatId, gate.id, "rel: land.gate");
 	f.commit("declare again");
 	await assert.rejects(testNamed({ gate: [gate.id] }, f.ctx), (error: Error) => /several declaring docs: /.test(error.message) && /ideas \(/.test(error.message) && /others \(/.test(error.message));
-	await testNamed({ gate: [gate.id], doc: f.otherFeatId }, f.ctx);
+	await testNamed({ gate: [gate.id], via: f.otherFeatId }, f.ctx);
 });
 
 test("the held dive answers among several declarers", async () => {

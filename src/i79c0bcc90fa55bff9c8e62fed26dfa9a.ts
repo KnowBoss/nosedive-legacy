@@ -20,7 +20,7 @@ export async function i79c0bcc90fa55bff9c8e62fed26dfa9a(args: Args, ctx: Ctx): P
 		if (!doc) throw new Error(`${what} ${ref} is no doc in this hero`);
 		return doc;
 	};
-	const via = typeof args.doc === "string" ? reachable(docs, find(args.doc, "--via")) : undefined;
+	const via = typeof args.via === "string" ? reachable(docs, find(args.via, "--via")) : undefined;
 	const selected: Selected[] = [];
 	for (const ref of [args.gate].flat() as string[]) {
 		const gate = find(ref, "gate");
@@ -29,7 +29,7 @@ export async function i79c0bcc90fa55bff9c8e62fed26dfa9a(args: Args, ctx: Ctx): P
 		let declared = [...docs.values()].flatMap((doc) => linksOf(doc).filter((link) => link.id === String(gate.fm.id) && link.rel.endsWith(".gate")).map((link) => ({ doc, link })));
 		if (via) {
 			declared = declared.filter(({ doc }) => via.has(String(doc.fm.id)));
-			if (declared.length === 0 && !("scopes" in gate.fm)) throw new Error(`no doc that ${String(args.doc)} reaches declares ${name}`);
+			if (declared.length === 0 && !("scopes" in gate.fm)) throw new Error(`no doc that ${String(args.via)} reaches declares ${name}`);
 		}
 		const own = dive && declared.find(({ doc }) => String(doc.fm.id) === dive.id);
 		if (own) declared = [own];

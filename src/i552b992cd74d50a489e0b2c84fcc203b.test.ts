@@ -12,9 +12,9 @@ test("hydrates a repo by name detached at trunk, and --read-only changes nothing
 
 test("hydrates a repo by quid detached at --at, and leaves an existing checkout where it is", async () => {
 	const f = fixture("at");
-	await hydrate({ repo: f.repoId, ref: f.first }, f.ctx);
+	await hydrate({ repo: f.repoId, at: f.first }, f.ctx);
 	assert.equal(git(f.checkout, "rev-parse", "HEAD"), f.first);
-	await hydrate({ repo: "data", ref: "main" }, f.ctx);
+	await hydrate({ repo: "data", at: "main" }, f.ctx);
 	assert.equal(git(f.checkout, "rev-parse", "HEAD"), f.first);
 	assert.ok(f.err.some((line) => /workspace\/data is at .*, not main, and is left there/.test(line)));
 });

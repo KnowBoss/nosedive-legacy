@@ -24,7 +24,7 @@ test("a first word ending in a colon is the kind, with a title and a body from a
 	const f = fixture("kind");
 	const body = join(f.hero, "..", "body.md");
 	writeFileSync(body, "Seen twice.\n");
-	await note({ gist: ["gate:", "Slow", "data"], repo: "data", title: "Slow data", source: body }, f.ctx);
+	await note({ gist: ["gate:", "Slow", "data"], scope: "data", title: "Slow data", body }, f.ctx);
 	const id = /kb\/(.+)\.md/.exec(f.out.at(-1)!)![1]!;
 	const doc = readFileSync(f.path(id), "utf8");
 	assert.match(doc, /kind: gate/);

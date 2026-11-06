@@ -19,21 +19,21 @@ export async function i58b390d976c95aa4bc065fbc8605e404(args: Args, ctx: Ctx): P
 	const gist = words.join(" ").trim();
 	if (!gist) throw new Error("a note needs a gist");
 	if (!findKind(kind, hero, ctx.capes)) throw new Error(`this hero has no kind ${kind}`);
-	let scope = typeof args.repo === "string" ? args.repo : undefined;
+	let scope = typeof args.scope === "string" ? args.scope : undefined;
 	if (!scope) {
 		const bridge = hero.config.bridge;
 		if (typeof bridge !== "string") throw new Error("name the repo the note is about with --scope <repo>: this hero's config names no bridge repo");
 		scope = bridge;
 	}
 	const repo = findRepo(hero, scope);
-	if (!args.repo) ctx.out(`scoped to ${String(repo.fm.name)}, the bridge repo`);
+	if (!args.scope) ctx.out(`scoped to ${String(repo.fm.name)}, the bridge repo`);
 
 	const id = mintUuid();
 	const slug = gist.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim().split(" ").filter(Boolean).slice(0, 6).join("-");
 	const name = `${slug}-${id.slice(-6)}`;
 	const title = typeof args.title === "string" ? args.title : slug.charAt(0).toUpperCase() + slug.slice(1).replace(/-/g, " ");
 	const doc = mintKbDoc(hero.kbDir, { kind, id, name, gist, title });
-	if (typeof args.source === "string") appendFileSync(doc.path, `\n${(await readText(args.source, ctx)).trimEnd()}\n`);
+	if (typeof args.body === "string") appendFileSync(doc.path, `\n${(await readText(args.body, ctx)).trimEnd()}\n`);
 	linkNewDoc(hero, ctx.capes[0]!.version, { action: "note", what: name }, { fromId: String(repo.fm.id), docId: id, docPath: doc.path, attrs: { rel: `${kind}.note` } });
 	ctx.out(relative(hero.dir, doc.path).replace(/\\/g, "/"));
 }

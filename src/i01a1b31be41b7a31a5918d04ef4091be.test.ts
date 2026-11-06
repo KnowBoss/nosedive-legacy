@@ -89,3 +89,13 @@ test("a push that fails makes it wait, recording nothing, and the next run pushe
 	assert.deepEqual(legacyPatches(f.hero, say().ctx), []);
 	assert.ok(git(f.remote, "rev-parse", ref));
 });
+
+test("a patch whose changes the pin has already is left out, and the rest still go", () => {
+	const { f, dive, ref, second } = packed("legacy-patches-there");
+	const path = f.path(dive);
+	writeFileSync(path, readFileSync(path, "utf8").replace(`ref: ${f.first}`, `ref: ${second}`));
+	f.commit("pin moved past the landed commit");
+	legacyPatches(f.hero, say().ctx);
+	assert.equal(git(f.remote, "log", "--format=%s", ref).split("\n").join("|"), "pack(ideas.packed): work in progress|second|first");
+	assert.equal(git(f.remote, "rev-parse", `${ref}^`), second, "on the pin itself");
+});

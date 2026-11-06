@@ -64,14 +64,19 @@ function build(repo: string, base: string, patches: Patch[], wip: string, ref: s
 		// Uncommitted work is one commit, the last, as pack makes it: jump undoes only the top one.
 		for (const patch of [...patches.filter((each) => !each.dirty), ...patches.filter((each) => each.dirty)]) {
 			if (!existsSync(patch.file)) return `its patch ${patch.file} is gone`;
+			// A patch whose changes the tree has already, as when the pin was moved past its landed work, is left out.
+			const there = () => git(tree, ["apply", "--reverse", "--check", "--binary", "--whitespace=nowarn", patch.file]).ok;
 			if (patch.dirty) {
-				const applied = git(tree, ["apply", "--index", "--binary", "--whitespace=nowarn", patch.file]);
-				if (!applied.ok) return `its uncommitted work no longer applies: ${applied.text}`;
+				const applied = git(tree, ["apply", "--3way", "--index", "--binary", "--whitespace=nowarn", patch.file]);
+				if (!applied.ok) {
+					git(tree, ["reset", "-q", "--hard"]);
+					if (!there()) return `its uncommitted work no longer applies: ${firstLine(applied.text)}`;
+				}
 			} else {
-				const applied = git(tree, ["am", "-q", "--keep-cr", "--committer-date-is-author-date", "--no-verify", patch.file], identity);
+				const applied = git(tree, ["am", "-q", "-3", "--keep-cr", "--committer-date-is-author-date", "--no-verify", patch.file], identity);
 				if (!applied.ok) {
 					git(tree, ["am", "--abort"]);
-					return `a patch no longer applies: ${applied.text}`;
+					if (!there()) return `a patch no longer applies: ${firstLine(applied.text)}`;
 				}
 			}
 		}
@@ -165,4 +170,9 @@ export function i01a1b31be41b7a31a5918d04ef4091be(dir: string, ctx: MigrationCtx
 	}
 	for (const each of pushed) ctx.out(`legacy-patches: pushed ${each}`);
 	return [];
+}
+
+/** The first line git says that is not a hint. */
+function firstLine(text: string): string {
+	return text.split(/\r?\n/).find((line) => line.trim() && !line.startsWith("hint:")) ?? text;
 }

@@ -1,0 +1,15 @@
+{
+	"name": "nosedive-legacy",
+	"version": "0.0.0",
+	"private": true,
+	"description": "Legacy nosedive's test, hydrate-repo.workspace, dehydrate-repo.workspace, record.gate and note, for a hero migrated to core.",
+	"license": "UNLICENSED",
+	"type": "module",
+	"scripts": {
+		"typecheck": "tsc"
+	},
+	"devDependencies": {
+		"@types/node": "^24.0.0",
+		"typescript": "^5.9.0"
+	}
+}

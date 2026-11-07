@@ -9,8 +9,8 @@ export const WORK_ID = "01a15bb1-da9e-7d2d-aa82-5ee97257adc6";
 export type Scope = { repoId: string; ref?: string };
 export type HeldDive = { id: string; doc: KbDoc & { path: string }; featId: string | undefined; scopes: Scope[] };
 
-/** Work's dive branch: `nosedive/<holder token>/<dive id>`. */
-const DIVE_BRANCH = /^nosedive\/([0-9a-f]{12})\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/;
+/** Work's dive branch: `nosedive-<holder token>-<dive id>`. */
+const DIVE_BRANCH = /^nosedive-([0-9a-f]{12})-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/;
 
 /** Whether a doc is of work's dive kind. */
 export function isDive(doc: { fm: Record<string, unknown>; path: string }): boolean {

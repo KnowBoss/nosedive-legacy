@@ -111,7 +111,7 @@ export function fixture(label: string) {
 			link(feat, id, "rel: dives.feat");
 			git(hero, "add", "-A");
 			git(hero, "commit", "-q", "-m", "dive");
-			if (hold) git(hero, "checkout", "-q", "-b", `nosedive/${token}/${id}`);
+			if (hold) git(hero, "checkout", "-q", "-b", `nosedive-${token}-${id}`);
 			return id;
 		},
 		commit(message: string) {

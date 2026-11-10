@@ -1,18 +1,28 @@
-import type { KbDoc, MigrationCtx } from "nosedive-core";
+import type { Bridge, Cape, KbDoc, MigrationCtx } from "nosedive-core";
 import { i01a1335485c67c95b7efdf2f0e03cfd6 as findBridge } from "nosedive-core";
 import { i01a13354850c7ba3ba5b8ac41a7b6b11 as listKbDocs } from "nosedive-core";
 import { i01a1335483aa776cb84df698b04adc06 as writeKbDoc } from "nosedive-core";
 import { i01a18e2a3b4b798d98068d4778a158e6 as docKind } from "nosedive-core";
+import { i01a141f869bf7f76b5bc81aa991ff9b9 as configuredCapes, wornCapes } from "nosedive-core";
 import { WORK_ID } from "./i01a1b131e1947fa5b316b390a3be2415.ts";
+import { LEGACY_ID } from "./i01a1c72ba0a67a64836f167c23ffa097.ts";
 
 type Doc = KbDoc & { path: string };
 
 const STATES = ["landed", "bailed", "planned", "jumped", "packed"];
 const QUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/;
-/** What work's dive schema allows in meta. */
+/** What the dive schema allows in meta, legacy's and work's alike. */
 const WORK_META = new Set(["diver", "packer", "outcome", "feat"]);
+/** Work's repo doc id, as core's legacy-capes registers work in a hero it converts. */
+const WORK_REPO = "01a15ba8-0bff-7ce3-83dc-e08af3633e26";
 
 const entries = (list: unknown): Record<string, unknown>[] => (Array.isArray(list) ? list.filter((entry) => entry && typeof entry === "object") : []) as Record<string, unknown>[];
+
+/** Whether the hero wears work: a cape it wears is registered by work's repo doc, or was built from work. */
+function wearsWork(hero: Bridge, core: Cape | undefined): boolean {
+	if (wornCapes(hero).some((cape) => cape.id === WORK_REPO)) return true;
+	return core !== undefined && configuredCapes(hero, core).some((cape) => cape.build?.owner === WORK_ID);
+}
 
 export function i01a1b31bdffb73989a9e8bcd257167b5(dir: string, ctx: MigrationCtx): string[] {
 	const hero = findBridge(dir);
@@ -46,10 +56,12 @@ export function i01a1b31bdffb73989a9e8bcd257167b5(dir: string, ctx: MigrationCtx
 		}
 	}
 
-	const canonical = [...docs.values()].map((doc) => entries(doc.fm.scopes).find((entry) => WORK_ID in entry)).find(Boolean);
-	const isWorkDive = (doc: Doc) => {
+	// A hero wearing work keeps work's dives, which its loop reads; any other gets legacy's.
+	const owner = wearsWork(hero, ctx.capes[0]) ? WORK_ID : LEGACY_ID;
+	const canonical = [...docs.values()].map((doc) => entries(doc.fm.scopes).find((entry) => owner in entry)).find(Boolean);
+	const isTargetDive = (doc: Doc) => {
 		const kind = docKind(doc);
-		return kind.owner === WORK_ID && kind.name === "dive";
+		return kind.owner === owner && kind.name === "dive";
 	};
 	for (const [id, { states, by }] of targets) {
 		const doc = docs.get(id);
@@ -57,10 +69,10 @@ export function i01a1b31bdffb73989a9e8bcd257167b5(dir: string, ctx: MigrationCtx
 			ctx.out(`legacy-dives: ${id} is linked as a dive and is no doc here, so it is left out`);
 			continue;
 		}
-		if (!isWorkDive(doc)) {
+		if (!isTargetDive(doc)) {
 			doc.yaml.set("kind", "dive");
 			const others = entries(doc.fm.scopes).filter((entry) => !Object.values(entry).some((value) => (value as { canonical?: unknown } | null)?.canonical === true));
-			doc.yaml.set("scopes", [...others, canonical ?? { [WORK_ID]: { canonical: true } }]);
+			doc.yaml.set("scopes", [...others, canonical ?? { [owner]: { canonical: true } }]);
 			changed.add(doc);
 		}
 		const outcome = states.has("landed") ? "landed" : states.has("bailed") ? "bailed" : undefined;
@@ -76,9 +88,9 @@ export function i01a1b31bdffb73989a9e8bcd257167b5(dir: string, ctx: MigrationCtx
 		}
 	}
 
-	// Every dive of work's, those already so included, keeps only the meta work's schema has.
+	// Every dive of that kind, those already so included, keeps only the meta its schema has.
 	for (const doc of docs.values()) {
-		if (!isWorkDive(doc) && !targets.has(String(doc.fm.id))) continue;
+		if (!isTargetDive(doc) && !targets.has(String(doc.fm.id))) continue;
 		const meta = doc.yaml.getIn(["meta"]) as { toJSON?: () => Record<string, unknown> } | undefined;
 		const keys = Object.keys((doc.yaml.toJS() as { meta?: Record<string, unknown> }).meta ?? {}).filter((key) => !WORK_META.has(key));
 		if (!meta || keys.length === 0) continue;
@@ -90,6 +102,6 @@ export function i01a1b31bdffb73989a9e8bcd257167b5(dir: string, ctx: MigrationCtx
 	}
 
 	for (const doc of changed) writeKbDoc(doc.path, doc.yaml, doc.body);
-	if (changed.size > 0) ctx.out(`legacy-dives: ${targets.size} dive${targets.size === 1 ? "" : "s"} linked by state, ${changed.size} doc${changed.size === 1 ? "" : "s"} rewritten to work's shape`);
+	if (changed.size > 0) ctx.out(`legacy-dives: ${targets.size} dive${targets.size === 1 ? "" : "s"} linked by state, ${changed.size} doc${changed.size === 1 ? "" : "s"} rewritten to ${owner === WORK_ID ? "work" : "legacy"}'s shape`);
 	return [...changed].map((doc) => doc.path);
 }

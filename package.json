@@ -2,11 +2,14 @@
 	"name": "nosedive-legacy",
 	"version": "0.0.0",
 	"private": true,
-	"description": "Legacy nosedive's test, hydrate-repo.workspace, dehydrate-repo.workspace, record.gate and note, for a hero migrated to core.",
+	"description": "Legacy nosedive's work loop (jump, pack, land and bail, with the dive kind), test, hydrate-repo.workspace, dehydrate-repo.workspace, record.gate and note, for a hero migrated to core.",
 	"license": "UNLICENSED",
 	"type": "module",
 	"scripts": {
 		"typecheck": "tsc"
+	},
+	"dependencies": {
+		"fflate": "0.8.2"
 	},
 	"devDependencies": {
 		"@types/node": "^24.0.0",

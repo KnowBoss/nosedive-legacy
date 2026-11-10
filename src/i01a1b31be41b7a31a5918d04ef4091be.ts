@@ -5,8 +5,7 @@ import { isAbsolute, join, resolve } from "node:path";
 import type { KbDoc, MigrationCtx } from "nosedive-core";
 import { i01a1335485c67c95b7efdf2f0e03cfd6 as findBridge } from "nosedive-core";
 import { i01a13354850c7ba3ba5b8ac41a7b6b11 as listKbDocs } from "nosedive-core";
-import { i01a18e2a3b4b798d98068d4778a158e6 as docKind } from "nosedive-core";
-import { WORK_ID } from "./i01a1b131e1947fa5b316b390a3be2415.ts";
+import { isDive } from "./i01a1b131e1947fa5b316b390a3be2415.ts";
 import { repoDocs } from "./i01a1b131e0177e7f8518b309634ebbd8.ts";
 
 type Doc = KbDoc & { path: string };
@@ -102,9 +101,8 @@ export function i01a1b31be41b7a31a5918d04ef4091be(dir: string, ctx: MigrationCtx
 	const pushed: string[] = [];
 	try {
 		for (const dive of docs.values()) {
-			const kind = docKind(dive);
 			const meta = (dive.fm.meta ?? {}) as Record<string, unknown>;
-			if (kind.owner !== WORK_ID || kind.name !== "dive" || (meta.outcome !== undefined && meta.outcome !== "bailed")) continue;
+			if (!isDive(dive) || (meta.outcome !== undefined && meta.outcome !== "bailed")) continue;
 			const name = String(dive.fm.name);
 			const ref = `refs/nosedive/${hero.id}/dives/${String(dive.fm.id)}`;
 			const wip = `pack(${name}): work in progress`;

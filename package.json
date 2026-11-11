@@ -3,7 +3,7 @@
 	"version": "0.0.0",
 	"private": true,
 	"description": "Legacy nosedive's work loop (jump, pack, land and bail, with the dive kind), test, hydrate-repo.workspace, dehydrate-repo.workspace, record.gate and note, for a hero migrated to core.",
-	"license": "UNLICENSED",
+	"license": "MIT",
 	"type": "module",
 	"scripts": {
 		"typecheck": "tsc"

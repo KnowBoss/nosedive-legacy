@@ -30,6 +30,12 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
+      # The loop commits in the checkouts it clones (pack's work in progress) as the user, as it would on a pilot's
+      # machine; the runner has no git identity of its own.
+      - name: Git identity
+        run: |
+          git config --global user.name "nosedive CI"
+          git config --global user.email ci@example.com
       - name: Core's main head
         working-directory: nosedive-core
         run: git log -1 --format='core %H %s' | tee -a "$GITHUB_STEP_SUMMARY"

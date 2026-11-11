@@ -12,6 +12,6 @@ Legacy runs against a built [nosedive-core](https://github.com/KnowBoss/nosedive
 
 - `npm run typecheck`: `tsc`, against core's `dist/core.d.ts`.
 - `npm test`: every `src/*.test.ts`, `nosedive-core` resolved to core's `dist/core.js`, as core's `pass --test` runs a cape's tests.
-- `npm run smoke`: `scripts/smoke.sh` seeds a throwaway hero with core's launcher, wears legacy at this checkout's HEAD commit (so commit first), lets core build the cape and run its migrations, then jumps, packs, jumps again and lands a dive, and jumps and bails another.
+- `npm run smoke`: `scripts/smoke.sh` seeds a throwaway hero with core's launcher, wears legacy at this checkout's HEAD commit (so commit first), lets core build the cape and run its migrations, then jumps, packs, jumps again, lands and drops a dive (checking core groups the dive branch's commits under it), and jumps and bails another.
 
 CI (`.github/workflows/core-main.yml`) runs all three against core's `main` head on every push to main, every PR and daily.

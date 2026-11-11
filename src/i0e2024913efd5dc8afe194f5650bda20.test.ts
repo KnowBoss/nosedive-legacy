@@ -8,6 +8,7 @@ import { i5f74ee87748f528b9fd9b00a48c2275b as pack } from "./i5f74ee87748f528b9f
 import { i3b8461aa9eac5f10837c2515b5231e78 as land } from "./i3b8461aa9eac5f10837c2515b5231e78.ts";
 import { ia159fdc01ac85e4f831dc1c523787ce6 as bail } from "./ia159fdc01ac85e4f831dc1c523787ce6.ts";
 import { i01a1335480c776ba8945020d0af333eb as mintUuid } from "nosedive-core";
+import { i01a1335482f876d6808aec457f512e80 as readKbDoc } from "nosedive-core";
 import { loopFixture as fixture, git } from "../test/harness.ts";
 import { i01a1335485c67c95b7efdf2f0e03cfd6 as findBridge } from "nosedive-core";
 import { LEGACY_ID, diveBranch, tokenOf } from "./i01a1c72ba0a67a64836f167c23ffa097.ts";
@@ -17,7 +18,7 @@ const branchOf = (f: ReturnType<typeof fixture>, id: string) => diveBranch(token
 /** What jump ends with, naming the dive's brief (jump-starts-the-work). */
 const nudge = (brief: string) => `Now do the dive's work, from its brief, ${brief}, to its feat's Done when; pack or land it only when the pilot asks.`;
 
-test("a feat the root reaches gets a dive with its scopes, naming the feat and linked from it as dives.feat, the hero and its scope on its dive branch, held by this checkout, its bookkeeping on the home it was jumped from", async () => {
+test("a feat the root reaches gets a dive with its scopes, naming the feat and linked from it as jumped.dive, the hero and its scope on its dive branch, held by this checkout, its bookkeeping on the home it was jumped from", async () => {
 	const f = fixture("jump-feat");
 	await jump({ ref: f.featId }, f.ctx);
 	const id = f.onDeck();
@@ -28,7 +29,8 @@ test("a feat the root reaches gets a dive with its scopes, naming the feat and l
 	assert.match(dive, new RegExp(`\\nmeta:\\n {2}feat: ${f.featId}\\n {2}diver: diver@example\\.com#[0-9a-f]{12}\\n`));
 	assert.doesNotMatch(dive, /\nlinks:/, "a dive links nothing back");
 	assert.match(dive, /\n## \d{4}-\d\d-\d\dT[\d:.]+Z jumped\n\ndiver@example\.com picked it up\.\n\n- data: workspace\/data on \w+, working work\/ideas\n$/);
-	assert.match(f.doc(f.featId), new RegExp(`- kb/${id}\\.md:\\n {6}rel: dives\\.feat\\n`));
+	assert.match(f.doc(f.featId), new RegExp(`- kb/${id}\\.md:\\n {6}rel: jumped\\.dive\\n`));
+	assert.doesNotMatch(f.doc(id) + f.doc(f.featId), /dives\.feat|outcome/, "no dives.feat link, no outcome");
 	assert.equal(git(f.checkout, "symbolic-ref", "--short", "HEAD"), branchOf(f, id), "the scope on the dive branch");
 	assert.equal(git(f.hero, "symbolic-ref", "--short", "HEAD"), branchOf(f, id), "and the hero");
 	assert.equal(git(f.hero, "rev-parse", "main"), git(f.hero, "rev-parse", "HEAD"), "cut from its home after the jump record");
@@ -63,12 +65,16 @@ test("the whole loop runs on a hero that wears legacy and not work: jump a feat,
 	assert.equal(f.onDeck(), id);
 	assert.equal(git(f.checkout, "rev-parse", "HEAD"), work, "its work back");
 	await land({}, f.ctx);
-	assert.match(f.doc(id), /\n {2}outcome: landed\n/);
+	assert.equal(f.relOf(f.featId, id), "landed.dive", "the feat's link says how it ended");
+	assert.doesNotMatch(f.doc(id), /outcome/);
 	assert.equal(git(f.remote, "log", "-1", "--format=%s", "work/ideas"), "add idea.md", "its work on its feat's branch");
 	const planned = f.plan("Try another way");
+	assert.equal(f.relOf(f.featId, planned), "planned.dive");
 	await jump({ ref: planned }, f.ctx);
+	assert.equal(f.relOf(f.featId, planned), "jumped.dive");
 	await bail({ reason: "a dead end" }, f.ctx);
-	assert.match(f.doc(planned), /\n {2}outcome: bailed\n/);
+	assert.equal(f.relOf(f.featId, planned), "bailed.dive");
+	assert.doesNotMatch(f.doc(planned), /outcome/);
 	assert.equal(git(f.hero, "symbolic-ref", "--short", "HEAD"), "main", "bailed, the hero home");
 });
 
@@ -191,12 +197,123 @@ test("a dive minted from another clone sharing the home's upstream is found once
 
 test("without a ref, takes the one dive waiting for the pilot, and refuses when none is", async () => {
 	const f = fixture("jump-bare");
-	await assert.rejects(jump({}, f.ctx), /no dive waits for you here: `nosedive jump <feat or dive>` names one/);
+	await assert.rejects(jump({}, f.ctx), /^Error: no dive waits for you here: `nosedive jump <feat or dive>` names one$/, "no dive is open, and none is named");
 	await jump({ ref: f.featId }, f.ctx);
 	const id = f.onDeck();
 	await pack({}, f.ctx);
 	await jump({}, f.ctx);
 	assert.equal(f.onDeck(), id);
+});
+
+test("a bare jump that finds several waiting, or none, names every open dive with its state, core's next listing none of them", async () => {
+	const f = fixture("jump-bare-several");
+	const mine = [`feat: ${f.featId}`, "diver: null", "packer: diver@example.com"];
+	const theirs = [`feat: ${f.featId}`, "diver: null", "packer: someone@example.com"];
+	const [planned, packed, away, held] = [f.legacyDive(), f.legacyDive({ state: "packed", meta: mine }), f.legacyDive({ state: "packed", meta: theirs }), f.legacyDive({ state: "jumped", meta: [`feat: ${f.featId}`, "diver: someone@example.com#0123456789ab"] })];
+	const over = f.legacyDive({ state: "landed", meta: [`feat: ${f.featId}`] });
+	await assert.rejects(jump({}, f.ctx), (error: Error) => {
+		assert.match(error.message, /^2 dives wait for you, so name one:\n/);
+		assert.match(error.message, new RegExp(`ideas\\.${planned.slice(-6)} \\(${planned}\\): planned\\n`));
+		assert.match(error.message, new RegExp(`ideas\\.${packed.slice(-6)} \\(${packed}\\): packed, packed by diver@example\\.com$`));
+		assert.doesNotMatch(error.message, new RegExp(`${away}|${held}|${over}`), "what another packed or holds, or is over, does not wait");
+		return true;
+	});
+
+	// With nothing waiting for this checkout, every open dive is named, the one held elsewhere and the one packed by another among them.
+	git(f.hero, "config", "user.email", "third@example.com");
+	for (const id of [planned, packed]) {
+		const path = join(f.hero, "kb", `${id}.md`);
+		writeFileSync(path, readFileSync(path, "utf8").replace(/\nmeta:\n[^]*?---/, `\nmeta:\n  feat: ${f.featId}\n  diver: null\n  packer: someone@example.com\n---`));
+	}
+	git(f.hero, "commit", "-qam", "packed by someone else");
+	git(f.hero, "push", "-q");
+	await assert.rejects(jump({}, f.ctx), (error: Error) => {
+		assert.match(error.message, /^no dive waits for you here: `nosedive jump <feat or dive>` names one; the hero's open dives:\n/);
+		for (const id of [planned, packed, away]) assert.match(error.message, new RegExp(`\\(${id}\\): ${id === planned ? "planned" : "packed"}, packed by someone@example\\.com`));
+		assert.match(error.message, new RegExp(`\\(${held}\\): jumped, held by someone@example\\.com`));
+		assert.doesNotMatch(error.message, new RegExp(over), "a dive that is over is not open");
+		return true;
+	});
+});
+
+test("a dive written by legacy nosedive is jumped, packed, jumped again and landed, its meta read as it was and its feat's link moved at each step", async () => {
+	const f = fixture("legacy-shape-loop");
+	// As record.dive wrote it before `meta.feat`: the feat named by `effort`, and a key of the pilot's own.
+	const id = f.legacyDive({ meta: ["effort: ideas", "priority: follow-up", "diver: null"] });
+	const meta = () => readKbDoc(f.doc(id)).fm.meta as Record<string, unknown>;
+	const { effort, priority } = meta();
+	const linksBefore = f.doc(f.featId);
+	assert.equal(f.relOf(f.featId, id), "planned.dive");
+
+	await jump({}, f.ctx);
+	assert.equal(f.onDeck(), id, "found by its planned.dive link, with no ref");
+	assert.equal(f.relOf(f.featId, id), "jumped.dive");
+	assert.deepEqual(meta(), { effort, priority, diver: `diver@example.com#${tokenOf(findBridge(f.hero)!, "main")}` }, "its own meta untouched, a feat not made up for it");
+	assert.match(f.doc(id), new RegExp(`scopes:\\n {2}- ${f.repoId}:\\n {6}work-branch: work/ideas\\n`), "its scope as legacy wrote it, its pin gone while the dive has no ref");
+	assert.doesNotMatch(f.doc(id), /canonical/, "no kind pin written to it");
+	assert.equal(git(f.checkout, "symbolic-ref", "--short", "HEAD"), branchOf(f, id));
+
+	const work = f.commit("idea.md", "an idea\n");
+	await pack({}, f.ctx);
+	assert.equal(f.relOf(f.featId, id), "packed.dive");
+	assert.deepEqual(meta(), { effort, priority, packer: "diver@example.com" });
+	assert.equal(f.remoteRef(`refs/nosedive/${f.heroId}/dives/${id}`), work);
+
+	await jump({}, f.ctx);
+	assert.equal(f.onDeck(), id);
+	assert.equal(f.relOf(f.featId, id), "jumped.dive");
+	assert.deepEqual(Object.keys(meta()).sort(), ["diver", "effort", "priority"], "the packer cleared");
+	assert.equal(git(f.checkout, "rev-parse", "HEAD"), work);
+
+	await land({}, f.ctx);
+	assert.equal(f.relOf(f.featId, id), "landed.dive");
+	assert.deepEqual(meta(), { effort, priority });
+	assert.equal(git(f.remote, "log", "-1", "--format=%(trailers:key=Nosedive-Feat,valueonly)", "work/ideas"), f.featId, "the feat effort names, found from the dive");
+	assert.doesNotMatch(f.doc(id) + f.doc(f.featId), /dives\.feat|outcome/);
+	assert.equal(f.doc(f.featId).replace(/rel: landed\.dive/, "rel: planned.dive"), linksBefore, "only the link's rel moved in the feat");
+	assert.throws(() => f.onDeck());
+	await assert.rejects(jump({ ref: id }, f.ctx), /is over: it landed$/);
+});
+
+test("a dive written by legacy nosedive is bailed, its link moved to bailed.dive and its meta kept; one with no feat named takes the doc that links it", async () => {
+	const f = fixture("legacy-shape-bail");
+	const note = ["feat: " + f.featId, "diver: null", "note: kept"];
+	const id = f.legacyDive({ state: "jumped", meta: note });
+	await jump({ ref: id }, f.ctx);
+	assert.equal(f.relOf(f.featId, id), "jumped.dive", "a jumped one, its diver null: picked up again");
+	f.commit("idea.md", "an idea\n");
+	await bail({ reason: "a dead end" }, f.ctx);
+	assert.equal(f.relOf(f.featId, id), "bailed.dive");
+	assert.deepEqual((readKbDoc(f.doc(id)).fm.meta as Record<string, unknown>), { feat: f.featId, note: "kept" });
+	assert.equal(f.remoteRef(`refs/nosedive/${f.heroId}/dives/${id}`) !== "", true, "what it held is kept");
+
+	const bare = f.legacyDive({ state: "planned", meta: ["diver: null"] });
+	await jump({ ref: bare }, f.ctx);
+	f.commit("more.md", "more\n");
+	await land({}, f.ctx);
+	assert.equal(f.relOf(f.featId, bare), "landed.dive");
+	assert.equal(git(f.remote, "log", "-1", "--format=%(trailers:key=Nosedive-Feat,valueonly)", "work/ideas"), f.featId, "the feat is the doc that links it");
+	assert.equal(readKbDoc(f.doc(bare)).fm.meta, undefined, "a meta emptied is dropped");
+});
+
+test("a dive that a doc other than its feat links, as an effort or a bug may, is found and moved on that doc", async () => {
+	const f = fixture("legacy-shape-linker");
+	const id = f.legacyDive({ from: f.heroId, meta: [`feat: ${f.featId}`, "diver: null"] });
+	await jump({}, f.ctx);
+	assert.equal(f.relOf(f.heroId, id), "jumped.dive");
+	await pack({}, f.ctx);
+	assert.equal(f.relOf(f.heroId, id), "packed.dive");
+	assert.equal(f.relOf(f.featId, id), undefined, "the feat never linked it");
+});
+
+test("jump refuses a bare attempt at a feat that links any dive by a state link, naming each and its state", async () => {
+	const f = fixture("legacy-shape-feat");
+	const [open, over] = [f.legacyDive(), f.legacyDive({ state: "bailed" })];
+	await assert.rejects(jump({ ref: f.featId, sure: true }, f.ctx), (error: Error) => {
+		assert.match(error.message, /ideas has 2 dives on it \(kb\/\S+\.md \(planned\), kb\/\S+\.md \(bailed\)\), so a bare jump would start it over, --sure or not/);
+		assert.ok(error.message.includes(`kb/${open}.md (planned)`) && error.message.includes(`kb/${over}.md (bailed)`));
+		return true;
+	});
 });
 
 test("picks packed work up on its work branch's new tip", async () => {
@@ -254,7 +371,7 @@ test("moves a checkout left from other work, keeping commits origin lacks on an 
 	const stray = f.commit("stray.md", "stray\n");
 
 	writeFileSync(join(f.checkout, "draft.md"), "draft\n");
-	await assert.rejects(jump({ ref: f.featId }, f.ctx), /ideas has a dive on it \(\S+\), so a bare jump would start it over/);
+	await assert.rejects(jump({ ref: f.featId }, f.ctx), /ideas has a dive on it \(\S+ \(landed\)\), so a bare jump would start it over/);
 	const planned = f.plan();
 	await assert.rejects(jump({ ref: planned }, f.ctx), /jump would lose work, so nothing moved:\n {2}workspace\/data has uncommitted changes or untracked files/);
 	git(f.checkout, "clean", "-qf");
@@ -273,7 +390,7 @@ test("a feat under a hero's second root gets its dive in that root's directory, 
 	await jump({ ref: f.featId }, f.ctx);
 	const id = f.onDeck();
 	assert.match(f.doc(id), /^---\nkind: dive\n/, "minted beside its feat in ./docs");
-	assert.match(f.doc(f.featId), new RegExp(`- docs/${id}\.md:\n {6}rel: dives\.feat\n`));
+	assert.match(f.doc(f.featId), new RegExp(`- docs/${id}\\.md:\\n {6}rel: jumped\\.dive\\n`));
 	await pack({}, f.ctx);
 	await jump({ ref: id }, f.ctx);
 	assert.equal(f.onDeck(), id);

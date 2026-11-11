@@ -2,7 +2,7 @@ import { relative } from "node:path";
 import type { Args, Ctx } from "nosedive-core";
 import { i01a1335485c67c95b7efdf2f0e03cfd6 as findBridge } from "nosedive-core";
 import { coAuthor } from "nosedive-core";
-import { i01a1c72ba0a67a64836f167c23ffa097 as diveOnDeck, deleteRefs, diveRefs, durableFeat, emailOf, featOf, fetchUpstream, heroDoc, homeUpstream, packIgnored, pushRecord, readOnlyRefusals, scopesWith, stamp, syncHome } from "./i01a1c72ba0a67a64836f167c23ffa097.ts";
+import { i01a1c72ba0a67a64836f167c23ffa097 as diveOnDeck, deleteRefs, diveRefs, durableFeat, emailOf, fetchUpstream, heroDoc, homeUpstream, packIgnored, pushRecord, readOnlyRefusals, scopesWith, stamp, syncHome } from "./i01a1c72ba0a67a64836f167c23ffa097.ts";
 import { i01a1c72ba0b57a0c80e3fdd641d001a8 as recordDive } from "./i01a1c72ba0b57a0c80e3fdd641d001a8.ts";
 import { i01a1c72ba0c37d27a058e908481307c3 as runGit } from "./i01a1c72ba0c37d27a058e908481307c3.ts";
 
@@ -39,7 +39,7 @@ export async function i3b8461aa9eac5f10837c2515b5231e78(args: Args, ctx: Ctx): P
 	}
 	if (refused.length > 0) throw new Error(`nothing was landed:\n  ${refused.join("\n  ")}`);
 
-	const trailers = [`Nosedive-Dive: ${id}`, `Nosedive-Feat: ${durableFeat(hero, dive.doc, ctx.capes)}`, coAuthor(ctx.capes[0]!.version)];
+	const trailers = [`Nosedive-Dive: ${id}`, `Nosedive-Feat: ${durableFeat(hero, dive, ctx.capes)}`, coAuthor(ctx.capes[0]!.version)];
 	const lines: string[] = [];
 	for (const scope of writable) {
 		const base = published.get(scope.name) ?? `refs/remotes/origin/${scope.trunk}`;
@@ -73,10 +73,10 @@ export async function i3b8461aa9eac5f10837c2515b5231e78(args: Args, ctx: Ctx): P
 	const cleared = new Map<string, string | undefined>([...dive.scopes.map((scope): [string, undefined] => [scope.repoId, undefined]), [hero.id!, undefined]]);
 	pushRecord(hero, () => {
 		const doc = heroDoc(hero, id)!;
-		recordDive(hero, doc, { action: "land", label: "landed", summary: `${me} landed it`, meta: { diver: null, outcome: "landed" }, scopes: scopesWith(hero, doc, cleared), lines: [`${me} landed it.`, "", ...lines] }, ctx.capes[0]!.version);
+		recordDive(hero, doc, { action: "land", label: "landed", state: "landed", summary: `${me} landed it`, meta: { diver: null }, scopes: scopesWith(hero, doc, cleared), lines: [`${me} landed it.`, "", ...lines] }, ctx.capes[0]!.version);
 	});
 
-	const featId = featOf(dive.doc);
+	const featId = dive.featId;
 	deleteRefs(hero.dir, diveRefs(hero.dir, id).map(({ ref }) => ref));
 	for (const scope of dive.scopes.filter((each) => each.ours)) {
 		packIgnored(hero, featId, scope);

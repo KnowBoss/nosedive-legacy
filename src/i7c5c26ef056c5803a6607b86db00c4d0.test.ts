@@ -37,14 +37,14 @@ function briefed(label: string, name = (_dive: string) => "ideas.briefed") {
 	return { f, dive, other, read, run };
 }
 
-test("a dive crud mints gets its feat's scopes, its canonical entry kept, and its feat's dives.feat link", async () => {
+test("a dive crud mints gets its feat's scopes, its canonical entry kept, and its feat's planned.dive link", async () => {
 	const { f, dive, read, run } = briefed("dive-shape-mint");
 	await run();
 	assert.match(read(dive), new RegExp(`scopes:\\n {2}- ${LEGACY_ID}:\\n {6}canonical: true\\n {2}- ${f.repoId}:\\n {6}work-branch: work/ideas\\n`));
 	assert.match(read(dive), /\n## Brief\n\nRead the comments\.$/, "its brief untouched");
 	assert.match(read(dive), new RegExp(`\\nname: ${dive.slice(-6)}\\.ideas\\n`), "named after its feat");
 	assert.match(read(dive), /\ngist: "Address review comments"\n/);
-	assert.match(read(f.featId), new RegExp(`- [^\\n]*${dive}\\.md:\\n {6}rel: dives\\.feat\\n`));
+	assert.match(read(f.featId), new RegExp(`- [^\\n]*${dive}\\.md:\\n {6}rel: planned\\.dive\\n`));
 });
 
 test("a dive not yet jumped moves to another feat's scopes and link", async () => {
@@ -55,11 +55,24 @@ test("a dive not yet jumped moves to another feat's scopes and link", async () =
 	assert.match(read(dive), new RegExp(`- ${f.repoId}`));
 	assert.doesNotMatch(read(f.featId), new RegExp(dive), "the old feat no longer links it");
 	assert.match(read(dive), new RegExp(`\\nname: ${dive.slice(-6)}\\.other\\n`), "renamed after the new feat");
-	assert.match(read(other), new RegExp(`${dive}\\.md:\\n {6}rel: dives\\.feat\\n`));
+	assert.match(read(other), new RegExp(`${dive}\\.md:\\n {6}rel: planned\\.dive\\n`));
 });
 
 test("a dive named feat first on its feat, as dives were before names went hex first, keeps its name", async () => {
 	const { dive, read, run } = briefed("dive-shape-old-name", (id) => `ideas.${id.slice(-6)}`);
 	await run();
 	assert.match(read(dive), new RegExp(`\\nname: ideas\\.${dive.slice(-6)}\\n`), "not renamed");
+});
+
+test("a dive naming no feat is refused, unless a doc links it, which then keeps its link and state", async () => {
+	const { f, dive, read, run } = briefed("dive-shape-linked");
+	const path = join(f.hero, git(f.hero, "ls-files", `*${dive}.md`));
+	writeFileSync(path, `---\nkind: dive\nid: ${dive}\nname: ideas.briefed\ngist: "Address review comments"\nscopes:\n  - ${LEGACY_ID}:\n      canonical: true\n---\n\n# Briefed\n`);
+	git(f.hero, "commit", "-qam", "no feat named");
+	await assert.rejects(run(), /a dive hangs from its feat: name it with --meta:feat <feat>/);
+	f.linkFrom(f.featId, dive, "jumped.dive");
+	git(f.hero, "commit", "-qam", "linked");
+	await run();
+	assert.match(read(f.featId), new RegExp(`${dive}\\.md:\\n {6}rel: jumped\\.dive\\n`), "the state it has stays");
+	assert.match(read(dive), new RegExp(`- ${f.repoId}:\\n {6}work-branch: work/ideas\\n`), "its feat's scopes, the feat the link names");
 });

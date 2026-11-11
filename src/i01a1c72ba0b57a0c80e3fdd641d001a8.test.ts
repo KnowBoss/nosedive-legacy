@@ -28,3 +28,14 @@ test("appends after a dive written with the old `## Jumped <time>` headings, lea
 	recordDive(hero, doc, { action: "bail", label: "bailed", summary: "gave up", lines: ["- new"] }, "test");
 	assert.match(f.doc(f.featId), /\n## Jumped 2026-01-01T00:00:00\.000Z\n\n- old\n\n## \d{4}-\d\d-\d\dT[\d:.]+Z bailed\n\n- new\n$/);
 });
+
+test("a state moves the dive's link on its feat in the same commit, and the dive's meta it does not set is kept", () => {
+	const f = fixture("record-dive-state");
+	const hero = findBridge(f.hero)!;
+	const id = f.legacyDive({ meta: ["effort: ideas", "priority: follow-up", "diver: null"] });
+	recordDive(hero, findKbDoc(hero.kbDir, id)!, { action: "pack", label: "packed", state: "packed", summary: "put down", meta: { packer: "a@example.com" }, lines: ["- two"] }, "test");
+	assert.equal(f.relOf(f.featId, id), "packed.dive");
+	assert.match(f.doc(id), /\nmeta:\n {2}effort: ideas\n {2}priority: follow-up\n {2}diver: null\n {2}packer: a@example\.com\n/);
+	assert.equal(git(f.hero, "status", "--porcelain"), "", "the feat's link rides the dive's commit");
+	assert.equal(git(f.hero, "show", "--name-only", "--format=", "HEAD").split("\n").length, 2, "the dive and its feat");
+});

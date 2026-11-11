@@ -10,7 +10,9 @@ import { i01a13dee4b1d78f7a699c3777bf63587 as readRepoConfig } from "nosedive-co
 import { i01a147171f057d019118aaa1f269f5fd as findKind, isDurable } from "nosedive-core";
 import { i01a18e2a3b4b798d98068d4778a158e6 as docKind } from "nosedive-core";
 import { CORE_OWNER, hasCoAuthor, isCoAuthor, featTree } from "nosedive-core";
-import { i01a1901e263b7209a4b5f39a71c568b3 as featWalk } from "nosedive-core";
+import { i01a13354850c7ba3ba5b8ac41a7b6b11 as listKbDocs } from "nosedive-core";
+import { i01a1335483aa776cb84df698b04adc06 as writeKbDoc } from "nosedive-core";
+import { linkedIds } from "nosedive-core";
 import { i01a19005c31172b68871d4842563d310 as commitMessage } from "nosedive-core";
 import type { Doc, Hero } from "./i01a1c72ba0b57a0c80e3fdd641d001a8.ts";
 import { i01a1c72ba0c37d27a058e908481307c3 as runGit } from "./i01a1c72ba0c37d27a058e908481307c3.ts";
@@ -18,10 +20,81 @@ import { i01a1c72ba0c37d27a058e908481307c3 as runGit } from "./i01a1c72ba0c37d27
 /** Legacy's seeded id, which owns its dive kind, its copy of work's. */
 export const LEGACY_ID = "01a1b128-2c08-790f-80f4-e2c40a98bfcc";
 
-/** Whether a doc's kind is legacy's dive, whichever repo holds the doc: work's dive, a kind of its own, is not. */
+/** Whether a doc's scopes name a canonical owner for its kind: a dive legacy nosedive wrote names none. */
+function hasCanonical(doc: Doc): boolean {
+	return (Array.isArray(doc.fm.scopes) ? doc.fm.scopes : []).some((entry) => entry && typeof entry === "object" && Object.values(entry as Record<string, { canonical?: unknown } | null>).some((value) => value?.canonical === true));
+}
+
+/**
+ * Whether a doc is a dive of legacy's: a doc of kind `dive` whose canonical scope names legacy, or none, as legacy nosedive
+ * wrote them. Work's dive, a kind of its own with its own canonical owner, is not.
+ */
 export function isDive(doc: Doc): boolean {
 	const kind = docKind(doc);
-	return kind.owner === LEGACY_ID && kind.name === "dive";
+	return kind.name === "dive" && (kind.owner === LEGACY_ID || !hasCanonical(doc));
+}
+
+/** Where a dive stands, as the rel of the state link its linking doc holds says. */
+export const STATES = ["planned", "jumped", "packed", "landed", "bailed"] as const;
+export type State = (typeof STATES)[number];
+const STATE_REL = /^(planned|jumped|packed|landed|bailed)\.dive$/;
+/** Strongest first: a dive linked as landed by one doc and jumped by another is landed. */
+const STRONGEST: State[] = ["landed", "bailed", "packed", "jumped", "planned"];
+
+/** A dive's state, and the docs that link it so: its feat, or an effort or bug. */
+export type Hung = { state: State; by: Doc[] };
+
+/** Whether a state ends a dive. */
+export function isOver(state: State): state is "landed" | "bailed" {
+	return state === "landed" || state === "bailed";
+}
+
+/** The state links a doc holds, each with the link's key as written, the dive it names and its state. */
+export function stateLinksOf(doc: { fm: Record<string, unknown> }): { key: string; id: string; state: State }[] {
+	const links = Array.isArray(doc.fm.links) ? doc.fm.links : [];
+	return links.flatMap((entry) =>
+		Object.entries((entry ?? {}) as Record<string, { rel?: unknown } | null>).flatMap(([key, value]) => {
+			const state = typeof value?.rel === "string" ? STATE_REL.exec(value.rel)?.[1] : undefined;
+			const id = linkedIds({ fm: { links: [{ [key]: { rel: value?.rel } }] } })[0]?.id;
+			return state && id ? [{ key, id, state: state as State }] : [];
+		}),
+	);
+}
+
+/**
+ * Every dive the hero's docs link by a state link, `planned.dive`, `jumped.dive`, `packed.dive`, `landed.dive` or `bailed.dive`,
+ * as legacy nosedive left them: the dive's id with its state and the docs that hold the link. Core's feat-tree reads no such
+ * link, so this reads every doc of the hero's roots.
+ */
+export function diveLinks(hero: Hero): Map<string, Hung> {
+	const docs = new Map<string, Doc>();
+	for (const dir of new Set([hero.kbDir, ...hero.roots.map((root) => root.dir)])) for (const doc of listKbDocs(dir)) docs.set(String(doc.fm.id), doc as Doc);
+	const found = new Map<string, { states: Set<State>; by: Doc[] }>();
+	for (const doc of docs.values()) {
+		for (const { id, state } of stateLinksOf(doc)) {
+			const known = found.get(id) ?? { states: new Set<State>(), by: [] };
+			known.states.add(state);
+			if (!known.by.includes(doc)) known.by.push(doc);
+			found.set(id, known);
+		}
+	}
+	return new Map([...found].map(([id, { states, by }]) => [id, { state: STRONGEST.find((state) => states.has(state))!, by }]));
+}
+
+/** Moves a dive's state link on every doc that holds one to `state`, its other attributes kept; returns the docs it rewrote. */
+export function moveLinks(hung: Hung, diveId: string, state: State): Doc[] {
+	const moved: Doc[] = [];
+	for (const doc of hung.by) {
+		const keys = new Set(stateLinksOf(doc).filter((link) => link.id === diveId && link.state !== state).map(({ key }) => key));
+		if (keys.size === 0) continue;
+		const links = (Array.isArray(doc.fm.links) ? doc.fm.links : []).map((entry) =>
+			Object.fromEntries(Object.entries((entry ?? {}) as Record<string, Record<string, unknown> | null>).map(([key, value]) => [key, keys.has(key) ? { ...value, rel: `${state}.dive` } : value])),
+		);
+		doc.yaml.set("links", links);
+		writeKbDoc(doc.path, doc.yaml, doc.body);
+		moved.push(doc);
+	}
+	return moved;
 }
 
 /** Ignored files an install or a build remakes, which packs leave out. */
@@ -31,8 +104,8 @@ const REBUILDABLE = /(^|\/)(node_modules|dist|build)\//;
 export type ScopeEntry = { repoId: string; branch?: string; ref?: string };
 /** A scope with its checkout, which is the dive's when on the dive's local branch, or present when read-only. */
 export type Scope = ScopeEntry & { repo: Doc; name: string; dir: string; trunk: string; ours: boolean };
-/** The dive on deck: its doc, its feat, its scopes, the hero's dive branch, its token, and its home, the branch it was jumped from. */
-export type Dive = { hero: Hero; doc: Doc; feat: Doc | undefined; scopes: Scope[]; branch: string; token: string; home: string };
+/** The dive on deck: its doc, its feat's id and doc, its state and the docs that link it, its scopes, the hero's dive branch, its token, and its home, the branch it was jumped from. */
+export type Dive = { hero: Hero; doc: Doc; featId: string; feat: Doc | undefined; hung: Hung; scopes: Scope[]; branch: string; token: string; home: string };
 type Say = { out(text: string): void; err(text: string): void };
 
 /** The hero's git user.email, which names a packer and starts a diver. */
@@ -391,31 +464,48 @@ export function repoDoc(hero: Hero, repoId: string): Doc {
 	return repo;
 }
 
-/** The feat a dive was minted on. */
-export function featOf(dive: Doc): string {
-	return String((dive.fm.meta as { feat?: unknown } | undefined)?.feat);
-}
-
-/** A dive's open/held state. */
-export function metaOf(dive: Doc): { diver?: string; packer?: string; outcome?: string } {
+/**
+ * The feat a dive works on: what its `meta.feat` names, or, as legacy nosedive's oldest dives had it, its `meta.effort`,
+ * by quid or name; else the doc that links it. Nothing is written to the dive for it.
+ */
+export function featIdOf(hero: Hero, dive: Doc, by: Doc[]): string | undefined {
 	const meta = (dive.fm.meta ?? {}) as Record<string, unknown>;
-	const text = (value: unknown) => (typeof value === "string" ? value : undefined);
-	return { diver: text(meta.diver), packer: text(meta.packer), outcome: text(meta.outcome) };
+	for (const named of [meta.feat, meta.effort]) {
+		const found = typeof named === "string" ? heroDoc(hero, named) : undefined;
+		if (found) return String(found.fm.id);
+	}
+	return by[0] ? String(by[0].fm.id) : undefined;
 }
 
-/** Every open dive: a doc of legacy's dive kind that core's feat-tree reaches, as its feat links it `dives.feat`, with no `meta.outcome`. */
-export function openDives(hero: Hero): Doc[] {
-	const walk = featWalk(hero);
-	return [...walk.feats.keys()].flatMap((id) => {
-		const doc = walk.docs.get(id);
-		return doc && isDive(doc) && !metaOf(doc).outcome ? [doc] : [];
+/** A dive's open/held state: who holds it and who last put it down. */
+export function metaOf(dive: Doc): { diver?: string; packer?: string } {
+	const meta = (dive.fm.meta ?? {}) as Record<string, unknown>;
+	const text = (value: unknown) => (typeof value === "string" && value !== "null" ? value : undefined);
+	return { diver: text(meta.diver), packer: text(meta.packer) };
+}
+
+/** An open dive: its doc, its state and the docs that link it. */
+export type Open = { doc: Doc; hung: Hung };
+
+/** Every open dive: a dive of legacy's that a doc links `planned.dive`, `jumped.dive` or `packed.dive`. */
+export function openDives(hero: Hero, links = diveLinks(hero)): Open[] {
+	return [...links].flatMap(([id, hung]) => {
+		const doc = !isOver(hung.state) ? heroDoc(hero, id) : undefined;
+		return doc && isDive(doc) ? [{ doc, hung }] : [];
 	});
 }
 
+/** How a dive is named in what the loop says: its name and quid, its state, and who holds or packed it. */
+export function describeDive({ doc, hung }: Open): string {
+	const { diver, packer } = metaOf(doc);
+	const by = diver ? `, held by ${diver.split("#")[0]}` : packer ? `, packed by ${packer}` : "";
+	return `${String(doc.fm.name)} (${String(doc.fm.id)}): ${hung.state}${by}`;
+}
+
 /** The dive's first durable feat ancestor, its own feat when none is found. */
-export function durableFeat(hero: Hero, dive: Doc, capes: Cape[]): string {
+export function durableFeat(hero: Hero, dive: { featId: string; hung: Hung }, capes: Cape[]): string {
 	const tree = featTree(hero);
-	const queue = [featOf(dive)];
+	const queue = [dive.featId, ...dive.hung.by.map((doc) => String(doc.fm.id))];
 	const seen = new Set<string>();
 	while (queue.length > 0) {
 		const id = queue.shift()!;
@@ -429,7 +519,7 @@ export function durableFeat(hero: Hero, dive: Doc, capes: Cape[]): string {
 		}
 		queue.push(...(tree.get(id)?.parents ?? []));
 	}
-	return featOf(dive);
+	return dive.featId;
 }
 
 /** How a doc in the hero's kb is linked: its path from the hero's root, bridge/<id>.md in a seeded hero. */
@@ -456,22 +546,25 @@ export function scopesOf(hero: Hero, doc: Doc, token: string): Scope[] {
 }
 
 /**
- * The dive on deck: the one the hero's branch names, `nosedive-<token>-<dive id>` (dive-branches), open and held by that
- * token, with its home, the branch it was jumped from (loop-returns-home). Given a dive's quid, refuses any other.
+ * The dive on deck: the one the hero's branch names, `nosedive-<token>-<dive id>` (dive-branches), open by its state link
+ * and held by that token, with its home, the branch it was jumped from (loop-returns-home). Given a dive's quid, refuses any other.
  */
 export function i01a1c72ba0a67a64836f167c23ffa097(hero: Hero, _ctx: Say, id?: string): Dive {
 	const branch = runGit(hero.dir, "symbolic-ref", "-q", "--short", "HEAD").text;
 	const parsed = parseDiveBranch(branch);
 	const doc = parsed && heroDoc(hero, parsed.diveId);
-	if (!parsed || !doc || !isDive(doc)) throw new Error("the hero is on no dive branch, so no dive is on deck: `nosedive jump <feat or dive>` picks one up");
+	const hung = parsed && diveLinks(hero).get(parsed.diveId);
+	// A dive legacy nosedive landed or bailed is a memo, which its state link still names.
+	if (!parsed || !doc || !hung || !(isOver(hung.state) || isDive(doc))) throw new Error("the hero is on no dive branch, so no dive is on deck: `nosedive jump <feat or dive>` picks one up");
 	const name = String(doc.fm.name);
 	if (id && id !== parsed.diveId && id !== name) throw new Error(`the dive on deck is ${name} (${parsed.diveId}), not ${id}`);
-	const { diver, outcome } = metaOf(doc);
-	if (outcome) throw new Error(`dive ${name} is over: it ${outcome}`);
+	const { diver } = metaOf(doc);
+	if (isOver(hung.state)) throw new Error(`dive ${name} is over: it ${hung.state}`);
 	if (diver?.split("#")[1] !== parsed.token) throw new Error(`dive ${name} is ${diver ? `held by ${diver.split("#")[0]}` : "held by nobody"} under another token than ${branch}'s, as a copied branch's would be`);
 	const home = homeOf(hero, parsed.token);
 	if (!home) throw new Error(`dive ${name}'s home, the branch it was jumped from, is gone: recreate it, as \`git branch <name> <commit>\``);
-	return { hero, doc, feat: heroDoc(hero, featOf(doc)), scopes: scopesOf(hero, doc, parsed.token), branch, token: parsed.token, home };
+	const featId = featIdOf(hero, doc, hung.by) ?? parsed.diveId;
+	return { hero, doc, featId, feat: heroDoc(hero, featId), hung, scopes: scopesOf(hero, doc, parsed.token), branch, token: parsed.token, home };
 }
 
 /** Why each read-only scope holds work it cannot publish: commits origin lacks, or uncommitted changes. */
@@ -575,7 +668,7 @@ export function putDown(dive: Dive, version: string): { puts: Put[]; refs: Map<s
 		if (put.sha) runGit(put.dir, "update-ref", own, put.sha);
 	}
 
-	for (const scope of dive.scopes.filter((each) => each.ours)) packIgnored(hero, featOf(dive.doc), scope);
+	for (const scope of dive.scopes.filter((each) => each.ours)) packIgnored(hero, dive.featId, scope);
 	for (const scope of writable) {
 		const base = runGit(scope.dir, "merge-base", "HEAD", baseOf(scope)).text || baseOf(scope);
 		const isSpared = spared(hero, scope.dir);

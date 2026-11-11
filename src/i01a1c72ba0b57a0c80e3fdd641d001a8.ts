@@ -2,6 +2,7 @@ import type { GateCtx } from "nosedive-core";
 import { i01a13354845c7253a55b60bba87285d8 as findKbDoc } from "nosedive-core";
 import { i01a13354894273b1be253424511ba82c as commitFiles } from "nosedive-core";
 import { i01a1335483aa776cb84df698b04adc06 as writeKbDoc } from "nosedive-core";
+import { diveLinks, moveLinks, type State } from "./i01a1c72ba0a67a64836f167c23ffa097.ts";
 
 export type Hero = GateCtx["bridge"];
 export type Doc = NonNullable<ReturnType<typeof findKbDoc>>;
@@ -12,6 +13,8 @@ export type Change = {
 	/** Names the section: `## <iso time> <label>`. */
 	label: string;
 	summary: string;
+	/** The state the dive's link moves to, on every doc that holds one: jump, pack, land and bail move it. */
+	state?: State;
 	/** Fields of `meta` to set; null clears one. */
 	meta?: Record<string, unknown>;
 	/** The dive's scopes, replaced whole. */
@@ -33,5 +36,6 @@ export function i01a1c72ba0b57a0c80e3fdd641d001a8(hero: Hero, doc: Doc, change: 
 	const body = `${doc.body.replace(/\n*$/, "\n")}\n## ${new Date().toISOString()} ${change.label}\n\n${change.lines.join("\n")}\n`;
 	writeKbDoc(doc.path, doc.yaml, body);
 	doc.body = body;
-	commitFiles(hero.dir, [doc.path, ...(change.also ?? [])], `${change.action}(${String(doc.fm.name)}): ${change.summary}`, version);
+	const linkers = change.state ? moveLinks(diveLinks(hero).get(String(doc.fm.id)) ?? { state: change.state, by: [] }, String(doc.fm.id), change.state) : [];
+	commitFiles(hero.dir, [...new Set([doc.path, ...linkers.map((linker) => linker.path), ...(change.also ?? [])])], `${change.action}(${String(doc.fm.name)}): ${change.summary}`, version);
 }

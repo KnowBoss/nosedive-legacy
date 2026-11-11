@@ -27,7 +27,7 @@ test("a feat with a dive is not jumped bare, --sure or not, the refusal naming h
 	const first = f.onDeck();
 	assert.match(f.doc(first), /\ngist: "?An attempt to complete ideas"?\n/);
 	await pack({}, f.ctx);
-	const refusal = new RegExp(`ideas has a dive on it \\(kb/${first}\\.md\\), so a bare jump would start it over, --sure or not: finish and drop it first, or plan another dive saying what it does, then jump that:\\n {2}nosedive crud nosedive-legacy:dive <gist> --meta:feat ${f.featId} --section:Brief -\\n {2}nosedive jump <dive>$`);
+	const refusal = new RegExp(`ideas has a dive on it \\(kb/${first}\\.md \\(packed\\)\\), so a bare jump would start it over, --sure or not: finish and drop it first, or plan another dive saying what it does, then jump that:\\n {2}nosedive crud nosedive-legacy:dive <gist> --meta:feat ${f.featId} --section:Brief -\\n {2}nosedive jump <dive>$`);
 	await assert.rejects(jump({ ref: f.featId }, f.ctx), refusal);
 	await assert.rejects(jumpSure({ ref: f.featId }, f.ctx), refusal);
 	const second = f.plan();

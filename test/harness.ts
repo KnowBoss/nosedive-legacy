@@ -186,6 +186,14 @@ export function loopFixture(label: string, options: { readOnly?: boolean; roots?
 	const capes = [cape("01a1336b-c0b8-7cde-b7c6-285196062297", "core", "core", {}), cape("01a1b128-2c08-790f-80f4-e2c40a98bfcc", "nosedive-legacy", "data", { dive: { id: "01a1c72b-a065-7e5b-9c4f-271115cffbe5", version: schemaVersion, schema: { type: "object" } } }, seed)];
 	const ctx: Ctx = { cwd: hero, out: (text) => void out.push(text), err: (text) => void err.push(text), stdin: async () => "", capes };
 	const checkout = join(hero, "workspace", "data");
+	/** Appends a link from a doc to a dive, as `reconcileDiveFeatLinks` wrote one. */
+	const linkFrom = (from: string, to: string, rel: string) => {
+		const path = join(hero, docs, `${from}.md`);
+		const doc = readKbDoc(readFileSync(path, "utf8"));
+		const links = Array.isArray(doc.fm.links) ? doc.fm.links : [];
+		doc.yaml.set("links", [...links, { [`${docs}/${to}.md`]: { rel } }]);
+		writeKbDoc(path, doc.yaml, doc.body);
+	};
 	return {
 		hero,
 		heroId,
@@ -215,22 +223,42 @@ export function loopFixture(label: string, options: { readOnly?: boolean; roots?
 		remoteRef: (ref: string) => spawnSync("git", ["rev-parse", "--verify", "-q", ref], { cwd: remote, encoding: "utf8" }).stdout.trim(),
 		/**
 		 * Plans a dive on the feat as `crud nosedive-legacy:dive <gist> --meta:feat <feat> --section:Brief -` would, dive-shape scoping, naming
-		 * and linking it: committed on the hero's main and pushed. Returns its id.
+		 * and linking it `planned.dive`: committed on the hero's main and pushed. Returns its id.
 		 */
 		plan(gist = "Do the next part"): string {
 			const id = mintUuid();
 			const repoScope = options.readOnly ? `  - ${repoId}: {}\n` : `  - ${repoId}:\n      work-branch: work/ideas\n`;
 			const scopes = `scopes:\n  - 01a1b128-2c08-790f-80f4-e2c40a98bfcc:\n      canonical: true\n${repoScope}`;
 			writeFileSync(join(hero, docs, `${id}.md`), `---\nkind: dive\nid: ${id}\nname: ideas.${id.slice(-6)}\ngist: "${gist}"\n${scopes}meta:\n  feat: ${featId}\n---\n\n# ${gist}\n\n## Brief\n\n${gist}.\n`);
-			const featPath = join(hero, docs, `${featId}.md`);
-			const feat = readKbDoc(readFileSync(featPath, "utf8"));
-			const links = Array.isArray(feat.fm.links) ? feat.fm.links : [];
-			feat.yaml.set("links", [...links, { [`${docs}/${id}.md`]: { rel: "dives.feat" } }]);
-			writeKbDoc(featPath, feat.yaml, feat.body);
+			linkFrom(featId, id, "planned.dive");
 			git(hero, "add", "-A");
 			git(hero, "commit", "-q", "-m", "plan a dive");
 			git(hero, "push", "-q", "origin", "HEAD:main");
 			return id;
+		},
+		/**
+		 * A dive as legacy nosedive's record.dive wrote it, which the loop must read as it is: `kind: dive` with no canonical scope, the repo
+		 * scoped by `ref` (its pin, the data repo's trunk) and a `work-branch`, `meta` as given (default: `feat` and a null `diver`), named
+		 * feat first, hung from `from` (default the feat) by a `<state>.dive` link. Committed on the hero's main and pushed. Returns its id.
+		 */
+		legacyDive(opts: { state?: string; from?: string; meta?: string[]; gist?: string; name?: string } = {}): string {
+			const id = mintUuid();
+			const pin = git(remote, "rev-parse", "main");
+			const scope = options.readOnly ? `  - ${repoId}:\n      ref: ${pin}\n` : `  - ${repoId}:\n      ref: ${pin}\n      work-branch: work/ideas\n`;
+			const meta = (opts.meta ?? [`feat: ${featId}`, "diver: null"]).map((line) => `  ${line}\n`).join("");
+			const gist = opts.gist ?? "Working on Ideas.";
+			writeFileSync(join(hero, docs, `${id}.md`), `---\nkind: dive\nid: ${id}\nname: ${opts.name ?? `ideas.${id.slice(-6)}`}\ngist: "${gist}"\nscopes:\n${scope}meta:\n${meta}---\n\n# Ideas ${id.slice(-6)}\n\n## Brief\n\n${gist}\n`);
+			linkFrom(opts.from ?? featId, id, `${opts.state ?? "planned"}.dive`);
+			git(hero, "add", "-A");
+			git(hero, "commit", "-q", "-m", "a legacy dive");
+			git(hero, "push", "-q", "origin", "HEAD:main");
+			return id;
+		},
+		linkFrom,
+		/** The rel of the link a doc holds to another, as the front matter has it. */
+		relOf(from: string, to: string): string | undefined {
+			const links = readKbDoc(readFileSync(join(hero, docs, `${from}.md`), "utf8")).fm.links as Record<string, { rel?: string }>[] | undefined;
+			return links?.flatMap((entry) => Object.entries(entry)).find(([key]) => key.endsWith(`${to}.md`))?.[1]?.rel;
 		},
 	};
 }

@@ -50,8 +50,10 @@ test("stamps and pushes the work to its feat's branch and the hero's to its home
 	assert.match(git(f.hero, "log", "-1", "--format=%s", "HEAD~2"), /^jump\([0-9a-f]{6}\.ideas\): /, "bookended by the jump and land records");
 	assert.equal(git(f.hero, "symbolic-ref", "--short", "HEAD"), "main", "the hero back home");
 	assert.equal(git(f.hero, "branch", "--list", `nosedive-*-${id}`), "", "its dive branch gone");
-	assert.match(f.doc(id), new RegExp(`\\nmeta:\\n {2}feat: [0-9a-f-]{36}\\n {2}outcome: landed\\n[^]*\\n## \\d{4}-\\d\\d-\\d\\dT[\\d:.]+Z landed\\n\\ndiver@example\\.com landed it\\.\\n\\n- data: pushed ${head.slice(0, 7)} to work/ideas\\n- hero: 1 commit onto main\\n$`));
+	assert.match(f.doc(id), new RegExp(`\\nmeta:\\n {2}feat: [0-9a-f-]{36}\\n---[^]*\\n## \\d{4}-\\d\\d-\\d\\dT[\\d:.]+Z landed\\n\\ndiver@example\\.com landed it\\.\\n\\n- data: pushed ${head.slice(0, 7)} to work/ideas\\n- hero: 1 commit onto main\\n$`));
 	assert.doesNotMatch(f.doc(id), /ref:/, "its refs are gone, so is their record");
+	assert.doesNotMatch(f.doc(id), /outcome/, "how it ended is its feat's link, not its meta");
+	assert.equal(f.relOf(f.featId, id), "landed.dive");
 	assert.equal(spawnSync("git", ["symbolic-ref", "-q", "HEAD"], { cwd: f.checkout }).status, 1, "detached");
 	assert.equal(git(f.checkout, "branch", "--list", `*/${id}`), "", "its branch is gone");
 

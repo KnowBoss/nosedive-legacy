@@ -1,0 +1,52 @@
+# Legacy against nosedive-core's main as it is now: typecheck and tests on a core built from main's head, then a smoke
+# run where core seeds a hero, builds legacy as a cape it wears, and runs legacy's loop through the launcher.
+name: core main
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  # Core's main moves without legacy changing: check daily.
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+
+jobs:
+  legacy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: nosedive-legacy
+          # Core builds the cape from a clone of this checkout at its HEAD commit.
+          fetch-depth: 0
+      - uses: actions/checkout@v4
+        with:
+          repository: KnowBoss/nosedive-core
+          ref: main
+          # The sibling tsconfig.json and scripts/resolve-core.mjs expect; core's build stamps its commit, so full history.
+          path: nosedive-core
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Core's main head
+        working-directory: nosedive-core
+        run: git log -1 --format='core %H %s' | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Build core
+        working-directory: nosedive-core
+        run: |
+          npm ci
+          npm run build
+      - name: Install legacy
+        working-directory: nosedive-legacy
+        run: npm ci
+      - name: Typecheck
+        working-directory: nosedive-legacy
+        run: npm run typecheck
+      - name: Test
+        working-directory: nosedive-legacy
+        run: npm test
+      - name: Smoke (seed, build the cape, run the loop)
+        working-directory: nosedive-legacy
+        run: npm run smoke

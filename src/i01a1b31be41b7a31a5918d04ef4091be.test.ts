@@ -99,3 +99,23 @@ test("a patch whose changes the pin has already is left out, and the rest still 
 	assert.equal(git(f.remote, "log", "--format=%s", ref).split("\n").join("|"), "pack(ideas.packed): work in progress|second|first");
 	assert.equal(git(f.remote, "rev-parse", `${ref}^`), second, "on the pin itself");
 });
+
+test("dives hung by state links, as legacy nosedive left them, are found: an open one and a bailed memo get their refs, a landed one none, and no doc is rewritten", () => {
+	const { f, dive, ref } = packed("legacy-patches-links");
+	const path = f.path(dive);
+	// As legacy wrote it: no canonical scope, no outcome, the feat holding a state link; bailed and landed dives memos.
+	writeFileSync(path, readFileSync(path, "utf8").replace(`  - ${WORK_ID}:\n      canonical: true\n`, ""));
+	f.link(f.featId, dive, "rel: packed.dive");
+	const [bailed, landed] = [mintUuid(), mintUuid()];
+	for (const [id, rel] of [[bailed, "bailed"], [landed, "landed"]] as const) {
+		writeFileSync(f.path(id), `---\nkind: memo\nid: ${id}\nname: ideas.${rel}\ngist: "Over"\nscopes:\n  - ${f.repoId}:\n      ref: ${f.first}\n      work-branch: work/ideas\n---\n\n# Over\n`);
+		f.link(f.featId, id, `rel: ${rel}.dive`);
+	}
+	f.commit("legacy shape");
+
+	assert.deepEqual(legacyPatches(f.hero, say().ctx), []);
+	assert.equal(git(f.remote, "log", "--format=%s", ref).split("\n").join("|"), "pack(ideas.packed): work in progress|second|first", "the open one's patches");
+	assert.equal(git(f.remote, "rev-parse", ref.replace(dive, bailed)), f.first, "a bailed memo's pin");
+	assert.equal(git(f.remote, "ls-remote", ".", `refs/nosedive/*/${landed}`), "", "a landed one needs none");
+	assert.equal(git(f.hero, "status", "--porcelain"), "", "nothing in the hero was rewritten");
+});

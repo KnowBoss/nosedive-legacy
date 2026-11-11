@@ -18,7 +18,7 @@ while read old new ref; do
   fi
 done
 exit 0
-`);
+`, { mode: 0o755 });
 	return hook;
 }
 
@@ -50,6 +50,7 @@ test("keeps the work on the dive's ref, uncommitted changes and all, packs ignor
 	const doc = f.doc(id);
 	assert.match(doc, new RegExp(`scopes:\\n {2}- ${f.repoId}:\\n {6}work-branch: work/ideas\\n {6}ref: ${tip}\\n`));
 	assert.match(doc, /\nmeta:\n {2}feat: [0-9a-f-]{36}\n {2}packer: diver@example\.com\n/);
+	assert.equal(f.relOf(f.featId, id), "packed.dive");
 	assert.match(doc, new RegExp(`\\n## \\d{4}-\\d\\d-\\d\\dT[\\d:.]+Z packed\\n\\ndiver@example\\.com put it down\\.\\n\\n- data: 2 commits kept on ${ref} at \\w+\\n- hero: no work\\n$`));
 	assert.equal(git(f.hero, "rev-parse", "HEAD"), git(f.hero, "ls-remote", "origin", "refs/heads/main").split("\t")[0], "the record is on trunk");
 
@@ -195,7 +196,7 @@ while read old new ref; do
     git update-ref "${legacy}" "$new"
   fi
 done
-`);
+`, { mode: 0o755 });
 
 	await assert.rejects(pack({}, f.ctx), (error: unknown) => {
 		assert.match(String(error), new RegExp(legacy.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));

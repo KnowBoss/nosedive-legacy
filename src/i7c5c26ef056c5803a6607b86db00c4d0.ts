@@ -1,9 +1,9 @@
 import type { GateCtx } from "nosedive-core";
 import { changed } from "nosedive-core";
-import { isDive, keyOf, readScopes } from "./i01a1c72ba0a67a64836f167c23ffa097.ts";
+import { diveLinks, isDive, keyOf, readScopes, stateLinksOf } from "./i01a1c72ba0a67a64836f167c23ffa097.ts";
 
 /**
- * A dive crud makes, or makes a dive, gets its feat's scopes, is linked from its feat as `dives.feat`, and is named after it;
+ * A dive crud makes, or makes a dive, gets its feat's scopes, is linked from its feat as `planned.dive`, and is named after it;
  * one whose feat crud changes, which the before gate allows only before it is jumped, moves to the new feat's scopes, link and name.
  */
 export async function i7c5c26ef056c5803a6607b86db00c4d0(ctx: GateCtx): Promise<void> {
@@ -12,7 +12,10 @@ export async function i7c5c26ef056c5803a6607b86db00c4d0(ctx: GateCtx): Promise<v
 	const became = !before || !isDive({ ...doc, fm: before.fm } as never);
 	const moved = before !== undefined && !became && changed(before, after, "meta.feat");
 	if (!became && !moved) return;
-	const featId = String((after.fm.meta as { feat?: unknown } | undefined)?.feat);
+	const hung = diveLinks(hero).get(doc.id);
+	const named = (after.fm.meta as { feat?: unknown } | undefined)?.feat;
+	const featId = typeof named === "string" ? named : hung?.by[0] && String(hung.by[0].fm.id);
+	if (!featId) throw new Error("a dive hangs from its feat: name it with --meta:feat <feat>");
 	const feat = ctx.edit.doc(featId);
 	const key = keyOf(hero, doc as never);
 
@@ -24,11 +27,11 @@ export async function i7c5c26ef056c5803a6607b86db00c4d0(ctx: GateCtx): Promise<v
 	for (const entry of wanted) patch[entry.repoId] = { "work-branch": entry.branch ?? null };
 	if (Object.keys(patch).length > 0) ctx.crud(doc.id, "scopes", patch);
 
-	if (moved) {
-		const from = String((before!.fm.meta as { feat?: unknown } | undefined)?.feat);
-		ctx.crud(from, "links", { [key]: null });
+	// A dive moved to another feat leaves the docs that linked it, its state kept: planned, as the before gate allows only that.
+	for (const linker of hung?.by ?? []) {
+		if (String(linker.fm.id) !== feat.id) for (const link of stateLinksOf(linker).filter((each) => each.id === doc.id)) ctx.crud(String(linker.fm.id), "links", { [link.key]: null });
 	}
-	ctx.crud(feat.id, "links", { [key]: { rel: "dives.feat" } });
+	ctx.crud(feat.id, "links", { [key]: { rel: `${hung?.state ?? "planned"}.dive` } });
 	// A dive is named after its feat, hex first, as jump names one (dive-names-derived); one named before that, on this feat, keeps its name (dive-name-hex-first).
 	const name = `${doc.id.slice(-6)}.${String(feat.fm.name)}`;
 	const old = !moved && after.fm.name === `${String(feat.fm.name)}.${doc.id.slice(-6)}`;

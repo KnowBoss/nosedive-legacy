@@ -11,7 +11,7 @@ import { i01a147171f057d019118aaa1f269f5fd as findKind } from "nosedive-core";
 import { i01a18e2a3b4b798d98068d4778a158e6 as docKind } from "nosedive-core";
 import { pinOf } from "nosedive-core";
 import { i01a1335483aa776cb84df698b04adc06 as writeKbDoc } from "nosedive-core";
-import { LEGACY_ID, isDive as isLegacyDive, diveBranch, diveBranches, emailOf, featOf, fetchAll, fetchUpstream, heroBranch, heroDoc, homeOf, homeUpstream, isDiveRef, keyOf, metaOf, openDives, orphan, parseDiveBranch, pushRecord, readScopes, repoDoc, scopesWith, swapIgnored, syncHome, tokenOf, trunkOf, isWip, type ScopeEntry } from "./i01a1c72ba0a67a64836f167c23ffa097.ts";
+import { LEGACY_ID, isDive as isLegacyDive, describeDive, diveBranch, diveBranches, diveLinks, emailOf, featIdOf, fetchAll, fetchUpstream, heroBranch, heroDoc, homeOf, homeUpstream, isDiveRef, isOver, keyOf, metaOf, openDives, orphan, parseDiveBranch, pushRecord, readScopes, repoDoc, scopesWith, stateLinksOf, swapIgnored, syncHome, tokenOf, trunkOf, isWip, type Hung, type ScopeEntry, type State } from "./i01a1c72ba0a67a64836f167c23ffa097.ts";
 import { i01a1c72ba0b57a0c80e3fdd641d001a8 as recordDive, type Doc, type Hero } from "./i01a1c72ba0b57a0c80e3fdd641d001a8.ts";
 import { i01a1c72ba0c37d27a058e908481307c3 as runGit } from "./i01a1c72ba0c37d27a058e908481307c3.ts";
 
@@ -37,13 +37,17 @@ export async function i0e2024913efd5dc8afe194f5650bda20(args: Args, ctx: Ctx): P
 	let home: string;
 	let token: string;
 	let mode: Mode;
+	// Where the target hangs, by its state link, when it is a dive; a feat hangs from nothing.
+	let hung: Hung | undefined;
 	const deck = parseDiveBranch(on);
 	const deckDoc = deck && heroDoc(hero, deck.diveId);
-	if (deck && deckDoc && isLegacyDive(deckDoc)) {
+	const deckHung = deck && diveLinks(hero).get(deck.diveId);
+	if (deck && deckDoc && deckHung && (isOver(deckHung.state) || isLegacyDive(deckDoc))) {
 		// On a dive branch, only its dive: set up again, losing nothing (one-dive-branch-per-checkout).
 		if (typeof args.ref === "string" && args.ref !== deck.diveId) throw new Error(`the hero is on dive ${named(deckDoc)}'s branch: pack, land or bail it first`);
-		refuseOver(hero, deckDoc, on, deck.token);
+		refuseOver(hero, deckDoc, deckHung.state, on, deck.token);
 		target = deckDoc;
+		hung = deckHung;
 		token = deck.token;
 		home = homeOf(hero, token) ?? missingHome(deckDoc);
 		mode = "again";
@@ -56,33 +60,39 @@ export async function i0e2024913efd5dc8afe194f5650bda20(args: Args, ctx: Ctx): P
 		syncHome(hero, home, up);
 		token = tokenOf(hero, home);
 		const holder = `${me}#${token}`;
-		const open = openDives(hero);
+		// A refusal names the open dives itself, though next lists them too.
+		const links = diveLinks(hero);
+		const open = openDives(hero, links);
 		if (typeof args.ref === "string") {
 			// A doc's path, as next prints it, names it by the quid it ends in (listed-paths-accepted).
 			const found = heroDoc(hero, args.ref.replace(LISTED, "$1").toLowerCase());
 			if (!found) throw new Error(`no doc ${args.ref} in the hero on ${home}`);
 			target = found;
+			hung = links.get(String(found.fm.id));
+			if (!hung && isLegacyDive(found)) throw new Error(`dive ${String(found.fm.name)} hangs from no doc: none links it \`planned.dive\`, \`jumped.dive\`, \`packed.dive\`, \`landed.dive\` or \`bailed.dive\`, so link it from its feat first`);
 		} else {
-			const held = open.filter((doc) => metaOf(doc).diver === holder);
-			const free = open.filter((doc) => !metaOf(doc).diver && (metaOf(doc).packer ?? me) === me);
+			const held = open.filter(({ doc }) => metaOf(doc).diver === holder);
+			const free = open.filter(({ doc }) => !metaOf(doc).diver && (metaOf(doc).packer ?? me) === me);
 			const waiting = held.length > 0 ? held : free;
-			if (waiting.length !== 1) throw new Error(waiting.length === 0 ? "no dive waits for you here: `nosedive jump <feat or dive>` names one" : `${waiting.length} dives wait for you, so name one:\n  ${waiting.map(named).join("\n  ")}`);
-			target = waiting[0]!;
+			if (waiting.length !== 1) throw new Error(waiting.length === 0 ? `no dive waits for you here: \`nosedive jump <feat or dive>\` names one${open.length > 0 ? `; the hero's open dives:\n  ${open.map(describeDive).join("\n  ")}` : ""}` : `${waiting.length} dives wait for you, so name one:\n  ${waiting.map(describeDive).join("\n  ")}`);
+			target = waiting[0]!.doc;
+			hung = waiting[0]!.hung;
 		}
 		const branches = diveBranches(hero);
 		const mine = branches.find((each) => each.diveId === String(target.fm.id));
 		if (branches.length > 0 && !mine) throw new Error(`this checkout has dive branch ${branches[0]!.branch}: switch to it, then pack, land or bail it first`);
 		if (mine) {
 			// Its own dive's branch, left by hand: back onto it, as on a dive branch.
-			refuseOver(hero, target, mine.branch, mine.token);
+			refuseOver(hero, target, hung?.state, mine.branch, mine.token);
 			const switched = runGit(hero.dir, "checkout", "-q", mine.branch);
 			if (!switched.ok) throw new Error(`cannot put the hero on ${mine.branch}: ${switched.text}`);
 			token = mine.token;
 			home = homeOf(hero, token) ?? missingHome(target);
 			mode = "again";
-		} else if (isLegacyDive(target)) {
+		} else if (hung) {
 			const meta = metaOf(target);
-			if (meta.outcome) throw new Error(`dive ${String(target.fm.name)} is over: it ${meta.outcome}`);
+			if (isOver(hung.state)) throw new Error(`dive ${String(target.fm.name)} is over: it ${hung.state}`);
+			if (!isLegacyDive(target)) throw new Error(`${String(target.fm.name)} is linked as a dive but is no dive of legacy's: ${String(target.fm.kind)} is not its kind`);
 			if (meta.diver && meta.diver !== holder && !bareDiverIs(meta.diver, me)) {
 				const [email, other] = meta.diver.split("#") as [string, string | undefined];
 				if (!other) throw new Error(`dive ${String(target.fm.name)} is held by ${email}, in no checkout in particular: only a checkout whose git user.email is ${email} can take it over (legacy-bare-diver)`);
@@ -94,7 +104,7 @@ export async function i0e2024913efd5dc8afe194f5650bda20(args: Args, ctx: Ctx): P
 		} else {
 			if (!featRoot(hero, String(target.fm.id))) throw new Error(`${String(target.fm.name)} is no feat: nothing reaches it from a root of the hero through a .feat link; link it from a feat first`);
 			// A bare jump is an attempt at all of the feat, so one with a dive on it, over or not, takes a dive planned with a brief (feat-jumps-bare).
-			const dives = diveLinks(target);
+			const dives = heldDives(target);
 			if (dives.length > 0) {
 				const id = String(target.fm.id);
 				throw new Error(
@@ -107,7 +117,7 @@ export async function i0e2024913efd5dc8afe194f5650bda20(args: Args, ctx: Ctx): P
 		}
 	}
 
-	const isDive = isLegacyDive(target);
+	const isDive = hung !== undefined;
 	const again = mode !== "record";
 	const diveId = isDive ? String(target.fm.id) : mintUuid();
 	const branch = diveBranch(token, diveId);
@@ -128,7 +138,7 @@ export async function i0e2024913efd5dc8afe194f5650bda20(args: Args, ctx: Ctx): P
 
 	const at = isDive ? undefined : featRoot(hero, String(target.fm.id));
 	if (!isDive) diveKind(hero, ctx); // Refuse an unpublished schema before moving any checkout.
-	const featId = isDive ? featOf(target) : String(target.fm.id);
+	const featId = (hung && featIdOf(hero, target, hung.by)) || String(target.fm.id);
 	const lines: string[] = [];
 	const moved: Planned[] = [];
 	for (const scope of plan) {
@@ -190,7 +200,7 @@ export async function i0e2024913efd5dc8afe194f5650bda20(args: Args, ctx: Ctx): P
 			if (!dive || !isLegacyDive(dive)) throw new Error(`${diveId} is no dive in the hero`);
 			const { diver } = metaOf(dive);
 			if (diver && diver !== holder && !bareDiverIs(diver, me)) throw new Error(`dive ${String(dive.fm.name)} was picked up by ${diver.split("#")[0]} meanwhile`);
-			recordDive(hero, dive, { action: "jump", label: "jumped", summary: `${me} picked it up`, meta: { diver: holder, packer: null }, scopes: scopesWith(hero, dive, refs), lines: [`${me} picked it up.`, "", ...lines], also }, ctx.capes[0]!.version);
+			recordDive(hero, dive, { action: "jump", label: "jumped", state: "jumped", summary: `${me} picked it up`, meta: { diver: holder, packer: null }, scopes: scopesWith(hero, dive, refs), lines: [`${me} picked it up.`, "", ...lines], also }, ctx.capes[0]!.version);
 		});
 	}
 	if (mode !== "again") {
@@ -228,31 +238,29 @@ export async function i0e2024913efd5dc8afe194f5650bda20(args: Args, ctx: Ctx): P
 }
 
 /** Refuses a dive that is over, landed or bailed, whose branch is still in this checkout, saying how to leave it. */
-function refuseOver(hero: Hero, dive: Doc, branch: string, token: string): void {
-	const { outcome } = metaOf(dive);
-	if (!outcome) return;
+function refuseOver(hero: Hero, dive: Doc, state: State | undefined, branch: string, token: string): void {
+	if (!state || !isOver(state)) return;
 	const home = homeOf(hero, token);
-	throw new Error(`dive ${String(dive.fm.name)} is over: it ${outcome}; to leave its branch, switch to its home${home ? `, ${home}` : ""}, the branch it was jumped from, and delete ${branch}`);
+	throw new Error(`dive ${String(dive.fm.name)} is over: it ${state}; to leave its branch, switch to its home${home ? `, ${home}` : ""}, the branch it was jumped from, and delete ${branch}`);
 }
 
 function missingHome(dive: Doc): never {
 	throw new Error(`dive ${String(dive.fm.name)}'s home, the branch it was jumped from, is gone: recreate it, as \`git branch <name> <commit>\``);
 }
 
-/** The paths of the dives a feat links `dives.feat`. */
-function diveLinks(doc: Doc): string[] {
-	const links = Array.isArray(doc.fm.links) ? doc.fm.links : [];
-	return links.flatMap((entry) => Object.entries((entry ?? {}) as Record<string, { rel?: unknown } | null>).filter(([, value]) => value?.rel === "dives.feat").map(([target]) => target));
+/** The dives a doc links by a state link, as `<path> (<state>)`. */
+function heldDives(doc: Doc): string[] {
+	return stateLinksOf(doc).map(({ key, state }) => `${key} (${state})`);
 }
 
-/** Why `next` would not list a feat: it is durable, or it has children, dives included; nothing when it is a non-durable leaf (sure-off-fringe). */
+/** Why `next` would not list a feat: it is durable, or it has children; nothing when it is a non-durable leaf (sure-off-fringe). */
 function offFringe(hero: Hero, doc: Doc, ctx: Ctx): string | undefined {
 	const kind = docKind(doc, hero.id);
 	const spelling = kind.owner === hero.id ? kind.name : `${kind.owner}:${kind.name}`;
 	if (isDurable(findKind(spelling, hero, ctx.capes))) return `${String(doc.fm.name)} is durable`;
 	const links = Array.isArray(doc.fm.links) ? doc.fm.links : [];
 	const children = links.filter((entry) => entry && typeof entry === "object" && Object.values(entry as Record<string, { rel?: unknown } | null>).some((value) => typeof value?.rel === "string" && value.rel.endsWith(".feat") && value.rel !== "parent.feat"));
-	if (children.length > 0) return `${String(doc.fm.name)} has ${children.length} child doc${children.length === 1 ? "" : "s"}, dives included, so it is no leaf`;
+	if (children.length > 0) return `${String(doc.fm.name)} has ${children.length} child doc${children.length === 1 ? "" : "s"}, so it is no leaf`;
 	return undefined;
 }
 
@@ -276,7 +284,7 @@ function switchTo(dir: string, local: string, workBranch: string, trunk: string)
 	if (!switched.ok) throw new Error(`cannot put ${dir} on ${local}: ${switched.text}`);
 }
 
-/** Mints a dive on a feat, its scopes the feat's, naming its feat and linked from it. */
+/** Mints a dive on a feat, its scopes the feat's, naming its feat and linked from it as `jumped.dive`, where jump leaves it. */
 function mintDive(hero: Hero, dir: string, feat: Doc, id: string, ctx: Ctx): void {
 	const name = `${id.slice(-6)}.${String(feat.fm.name)}`;
 	const scopes: unknown[] = readScopes(hero, feat).map((entry) => ({ [entry.repoId]: entry.branch ? { "work-branch": entry.branch } : {} }));
@@ -287,7 +295,7 @@ function mintDive(hero: Hero, dir: string, feat: Doc, id: string, ctx: Ctx): voi
 	doc.yaml.set("scopes", scopes);
 	writeKbDoc(doc.path, doc.yaml, doc.body);
 	const links = Array.isArray(feat.fm.links) ? feat.fm.links : [];
-	feat.yaml.set("links", [...links, { [keyOf(hero, doc)]: { rel: "dives.feat" } }]);
+	feat.yaml.set("links", [...links, { [keyOf(hero, doc)]: { rel: "jumped.dive" } }]);
 	writeKbDoc(feat.path, feat.yaml, feat.body);
 }
 

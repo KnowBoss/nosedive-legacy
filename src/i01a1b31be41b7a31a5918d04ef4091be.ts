@@ -6,6 +6,7 @@ import type { KbDoc, MigrationCtx } from "nosedive-core";
 import { i01a1335485c67c95b7efdf2f0e03cfd6 as findBridge } from "nosedive-core";
 import { i01a13354850c7ba3ba5b8ac41a7b6b11 as listKbDocs } from "nosedive-core";
 import { isDive } from "./i01a1b131e1947fa5b316b390a3be2415.ts";
+import { diveLinks } from "./i01a1c72ba0a67a64836f167c23ffa097.ts";
 import { repoDocs } from "./i01a1b131e0177e7f8518b309634ebbd8.ts";
 
 type Doc = KbDoc & { path: string };
@@ -99,10 +100,14 @@ export function i01a1b31be41b7a31a5918d04ef4091be(dir: string, ctx: MigrationCtx
 	for (const root of hero.roots) for (const doc of listKbDocs(root.dir)) docs.set(String(doc.fm.id), doc);
 	const repos = repoDocs(hero);
 	const pushed: string[] = [];
+	const hanging = diveLinks(hero);
 	try {
 		for (const dive of docs.values()) {
 			const meta = (dive.fm.meta ?? {}) as Record<string, unknown>;
-			if (!isDive(dive) || (meta.outcome !== undefined && meta.outcome !== "bailed")) continue;
+			// A dive of legacy's hangs by a state link, over once landed, whatever its kind, a bailed one being a memo as legacy nosedive left it; work's, by its kind and `meta.outcome`.
+			const hung = hanging.get(String(dive.fm.id));
+			const open = hung ? hung.state !== "landed" : isDive(dive) && (meta.outcome === undefined || meta.outcome === "bailed");
+			if (!open) continue;
 			const name = String(dive.fm.name);
 			const ref = `refs/nosedive/${hero.id}/dives/${String(dive.fm.id)}`;
 			const wip = `pack(${name}): work in progress`;

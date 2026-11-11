@@ -5,7 +5,6 @@ import { i01a1335483aa776cb84df698b04adc06 as writeKbDoc } from "nosedive-core";
 import { i01a18e2a3b4b798d98068d4778a158e6 as docKind } from "nosedive-core";
 import { i01a141f869bf7f76b5bc81aa991ff9b9 as configuredCapes, wornCapes } from "nosedive-core";
 import { WORK_ID } from "./i01a1b131e1947fa5b316b390a3be2415.ts";
-import { LEGACY_ID } from "./i01a1c72ba0a67a64836f167c23ffa097.ts";
 
 type Doc = KbDoc & { path: string };
 
@@ -19,14 +18,19 @@ const WORK_REPO = "01a15ba8-0bff-7ce3-83dc-e08af3633e26";
 const entries = (list: unknown): Record<string, unknown>[] => (Array.isArray(list) ? list.filter((entry) => entry && typeof entry === "object") : []) as Record<string, unknown>[];
 
 /** Whether the hero wears work: a cape it wears is registered by work's repo doc, or was built from work. */
-function wearsWork(hero: Bridge, core: Cape | undefined): boolean {
+export function wearsWork(hero: Bridge, core: Cape | undefined): boolean {
 	if (wornCapes(hero).some((cape) => cape.id === WORK_REPO)) return true;
 	return core !== undefined && configuredCapes(hero, core).some((cape) => cape.build?.owner === WORK_ID);
 }
 
+/**
+ * Retired for a hero that wears legacy and not work: legacy's loop reads dives as legacy nosedive left them, so nothing is
+ * rewritten (legacy-keeps-dive-shape). A hero wearing work is still converted, as work's loop reads work's shape.
+ */
 export function i01a1b31bdffb73989a9e8bcd257167b5(dir: string, ctx: MigrationCtx): string[] {
 	const hero = findBridge(dir);
 	if (!hero || hero.dir !== dir) return [];
+	if (!wearsWork(hero, ctx.capes[0])) return [];
 	const docs = new Map<string, Doc>();
 	for (const root of hero.roots) for (const doc of listKbDocs(root.dir)) docs.set(String(doc.fm.id), doc);
 	const changed = new Set<Doc>();
@@ -56,8 +60,8 @@ export function i01a1b31bdffb73989a9e8bcd257167b5(dir: string, ctx: MigrationCtx
 		}
 	}
 
-	// A hero wearing work keeps work's dives, which its loop reads; any other gets legacy's.
-	const owner = wearsWork(hero, ctx.capes[0]) ? WORK_ID : LEGACY_ID;
+	// A hero wearing work gets work's dives, which its loop reads.
+	const owner = WORK_ID;
 	const canonical = [...docs.values()].map((doc) => entries(doc.fm.scopes).find((entry) => owner in entry)).find(Boolean);
 	const isTargetDive = (doc: Doc) => {
 		const kind = docKind(doc);
@@ -102,6 +106,6 @@ export function i01a1b31bdffb73989a9e8bcd257167b5(dir: string, ctx: MigrationCtx
 	}
 
 	for (const doc of changed) writeKbDoc(doc.path, doc.yaml, doc.body);
-	if (changed.size > 0) ctx.out(`legacy-dives: ${targets.size} dive${targets.size === 1 ? "" : "s"} linked by state, ${changed.size} doc${changed.size === 1 ? "" : "s"} rewritten to ${owner === WORK_ID ? "work" : "legacy"}'s shape`);
+	if (changed.size > 0) ctx.out(`legacy-dives: ${targets.size} dive${targets.size === 1 ? "" : "s"} linked by state, ${changed.size} doc${changed.size === 1 ? "" : "s"} rewritten to work's shape`);
 	return [...changed].map((doc) => doc.path);
 }

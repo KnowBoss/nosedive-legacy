@@ -16,7 +16,7 @@ export async function i5f74ee87748f528b9fd9b00a48c2275b(args: Args, ctx: Ctx): P
 	const id = String(dive.doc.fm.id);
 	pushRecord(hero, () => {
 		const doc = heroDoc(hero, id)!;
-		recordDive(hero, doc, { action: "pack", label: "packed", summary: `${me} put it down`, meta: { diver: null, packer: me }, scopes: scopesWith(hero, doc, refs), lines: [`${me} put it down.`, "", ...lines] }, ctx.capes[0]!.version);
+		recordDive(hero, doc, { action: "pack", label: "packed", state: "packed", summary: `${me} put it down`, meta: { diver: null, packer: me }, scopes: scopesWith(hero, doc, refs), lines: [`${me} put it down.`, "", ...lines] }, ctx.capes[0]!.version);
 	});
 	ctx.out(`packed ${String(dive.doc.fm.name)}${lines.length > 0 ? `\n${lines.join("\n")}` : ""}`);
 }

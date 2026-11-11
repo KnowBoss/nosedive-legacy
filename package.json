@@ -6,7 +6,9 @@
 	"license": "MIT",
 	"type": "module",
 	"scripts": {
-		"typecheck": "tsc"
+		"typecheck": "tsc",
+		"test": "node --disable-warning=ExperimentalWarning --import ./scripts/resolve-core.mjs --test --test-reporter=spec \"src/*.test.ts\"",
+		"smoke": "bash scripts/smoke.sh"
 	},
 	"dependencies": {
 		"fflate": "0.8.2"

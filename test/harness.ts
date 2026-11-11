@@ -262,3 +262,14 @@ export function loopFixture(label: string, options: { readOnly?: boolean; roots?
 		},
 	};
 }
+
+/**
+ * Declares legacy's dive kind on the loop fixture's cape as a build records it from the kind's doc, its `meta` (schema and `next`)
+ * and its Drop when, which is what core's `next` and canonical-kinds read of a cape's kind.
+ */
+export function declareDiveKind(f: { ctx: Ctx; schemaVersion: string }): void {
+	const doc = readKbDoc(readFileSync(new URL("../.nosedive/kinds/01a1c72b-a065-7e5b-9c4f-271115cffbe5.md", import.meta.url), "utf8"));
+	const dropWhen = /^## Drop when\r?\n+([^]*?)(?=\r?\n## |$)/m.exec(doc.body)?.[1]?.trim();
+	const cape = f.ctx.capes.find((each) => each.shortName === "nosedive-legacy")!;
+	cape.kinds.dive = { ...(doc.fm.meta as object), id: doc.fm.id, links: doc.fm.links, version: f.schemaVersion, ...(dropWhen === undefined ? {} : { dropWhen }) };
+}

@@ -5,7 +5,12 @@ import { i01a1335485c67c95b7efdf2f0e03cfd6 as findBridge } from "nosedive-core";
 import { digestOf, featNameOf, type KindMeta } from "nosedive-core";
 import { i01a1c72ba0a67a64836f167c23ffa097 as diveOnDeck, LEGACY_ID, diveBranch, diveLinks, diverOf, featIdOf, heroDoc, isDive, isWip, moveLinks, openDives, parseDiveBranch, tokenOf, wip, readScopes, scopesWith } from "./i01a1c72ba0a67a64836f167c23ffa097.ts";
 import { i0e2024913efd5dc8afe194f5650bda20 as jump } from "./i0e2024913efd5dc8afe194f5650bda20.ts";
-import { loopFixture as fixture, git } from "../test/harness.ts";
+import { i01a1335482f876d6808aec457f512e80 as readKbDoc } from "nosedive-core";
+import { i01a18e8044c97daeb0498ee7ad07bf43 as canonicalKinds } from "nosedive-core";
+import { i01a19eb470547ce5935e03ab6c97a715 as listNext } from "nosedive-core";
+import { i5f74ee87748f528b9fd9b00a48c2275b as pack } from "./i5f74ee87748f528b9fd9b00a48c2275b.ts";
+import { i3b8461aa9eac5f10837c2515b5231e78 as land } from "./i3b8461aa9eac5f10837c2515b5231e78.ts";
+import { declareDiveKind, loopFixture as fixture, git } from "../test/harness.ts";
 
 test("refuses off a dive branch, then gives the dive the hero's branch names, its home, its feat and each scope, and refuses any other", async () => {
 	const f = fixture("dive-on-deck");
@@ -122,4 +127,56 @@ test("a dive's work in progress is told by its name, in the subject pack writes 
 	assert.equal(isWip(dive, "feat(ideas): pack work in progress on ideas.other1"), false, "another dive's");
 	assert.equal(isWip(dive, "pack(ideas.other1): work in progress"), false, "legacy, another dive's");
 	assert.equal(isWip(dive, "add idea.md"), false);
+});
+
+const NEXT_USAGE = "ubc5113a84ba55195add71cac33f0bf20";
+const DIVE_STATES = ["planned", "jumped", "packed", "landed", "bailed"] as const;
+const legacyEntry = (doc: { fm: Record<string, unknown> }) => (doc.fm.scopes as Record<string, unknown>[] | undefined)?.find((entry) => LEGACY_ID in entry);
+
+test("a hero wearing legacy, its dives as legacy nosedive wrote them: seeding gives each legacy's canonical entry and nothing else, next lists each under its linking doc in every state, and the loop still moves it", async () => {
+	const f = fixture("dives-listed");
+	declareDiveKind(f);
+	const written = DIVE_STATES.map((state) => f.legacyDive({ state }));
+	const stamped = f.plan(); // one that carries the entry already, as jump and crud mint them
+	const snapshot = (id: string) => {
+		const { fm, body } = readKbDoc(f.doc(id));
+		return { fm: { ...fm, scopes: (fm.scopes as unknown[]).filter((entry) => !(entry && typeof entry === "object" && LEGACY_ID in entry)) }, body };
+	};
+	const before = new Map([...written, stamped].map((id) => [id, snapshot(id)]));
+	for (const id of written) assert.equal(legacyEntry(readKbDoc(f.doc(id))), undefined, "as legacy nosedive wrote it, no entry");
+
+	// The migration core's seed runs, called as it is: the dives are of a kind a worn cape declares.
+	const said: string[] = [];
+	const changed = canonicalKinds(f.hero, { capes: f.ctx.capes, out: (text) => void said.push(text) });
+	assert.notEqual(changed, undefined, said.join("\n"));
+	const pin = { canonical: true, version: f.schemaVersion, schema: digestOf(f.ctx.capes[1]!.kinds.dive as KindMeta) };
+	for (const id of written) assert.deepEqual(legacyEntry(readKbDoc(f.doc(id))), { [LEGACY_ID]: pin }, `${id} carries legacy's entry`);
+	assert.deepEqual(legacyEntry(readKbDoc(f.doc(stamped))), { [LEGACY_ID]: { canonical: true } }, "one that had an entry is left as it was");
+	for (const id of [...written, stamped]) assert.deepEqual(snapshot(id), before.get(id), `${id} is otherwise as it was`);
+	git(f.hero, "add", "-A");
+	git(f.hero, "commit", "-qm", "migrate: canonical-kinds");
+	git(f.hero, "push", "-q", "origin", "HEAD:main");
+
+	const out: string[] = [];
+	await listNext({ usage: NEXT_USAGE, args: {}, ctx: { ...f.ctx, out: (text) => void out.push(text) } });
+	const listed = out.join("\n").split("\n");
+	const featAt = listed.findIndex((line) => line.startsWith("ideas  "));
+	assert.notEqual(featAt, -1, out.join("\n"));
+	const under = listed.slice(featAt + 1, listed.findIndex((line, at) => at > featAt && !line.startsWith("  ")));
+	for (const id of [...written, stamped]) assert.equal(under.filter((line) => line.includes(`${id}.md`) && /^ {2}nosedive-legacy:dive /.test(line)).length, 1, `next lists ${id} under its feat`);
+
+	// The loop, on a dive that was stamped: jumped, packed, jumped again and landed.
+	const id = written[0]!;
+	await jump({ ref: id }, f.ctx);
+	assert.equal(f.onDeck(), id);
+	assert.deepEqual(legacyEntry(readKbDoc(f.doc(id))), { [LEGACY_ID]: pin }, "jump keeps the entry");
+	const work = f.commit("idea.md", "an idea\n");
+	await pack({}, f.ctx);
+	assert.equal(f.relOf(f.featId, id), "packed.dive");
+	assert.deepEqual(legacyEntry(readKbDoc(f.doc(id))), { [LEGACY_ID]: pin }, "pack keeps it");
+	await jump({ ref: id }, f.ctx);
+	assert.equal(git(f.checkout, "rev-parse", "HEAD"), work);
+	await land({}, f.ctx);
+	assert.equal(f.relOf(f.featId, id), "landed.dive");
+	assert.deepEqual(legacyEntry(readKbDoc(f.doc(id))), { [LEGACY_ID]: pin }, "land keeps it");
 });

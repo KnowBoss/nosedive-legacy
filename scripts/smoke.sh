@@ -19,6 +19,12 @@ has() { grep -q "$2" "$1" || fail "$3 (no \`$2\` in ${1#"$W"/})"; }
 
 step "core $(git -C "$CORE_DIR" rev-parse --short HEAD), legacy $(git -C "$LEGACY_DIR" rev-parse --short HEAD)"
 
+step "legacy published: this checkout's HEAD as main of a throwaway origin"
+# Core reads a cape's kind schemas as published only when they are on its origin's trunk, so the cape gets an origin
+# whose main is HEAD, whatever branches this checkout has (CI's is a detached merge commit).
+git init -q --bare -b main "$W/legacy.git"
+git -C "$LEGACY_DIR" push -q "$W/legacy.git" "$LEGACY_COMMIT:refs/heads/main"
+
 step "a data repo with an upstream"
 git init -q --bare -b main "$W/data.git"
 git init -q -b main "$W/data-seed"
@@ -43,7 +49,7 @@ ROOT_ID=$(basename "$ROOT" .md)
 quid() { basename "$1" .md; }
 
 step "register legacy and a data repo, wear legacy, add two goals on data (crud commits each)"
-LEGACY=$(nd crud core:repo "Legacy nosedive's actions" --name nosedive-legacy --meta:remotes.origin "$LEGACY_DIR")
+LEGACY=$(nd crud core:repo "Legacy nosedive's actions" --name nosedive-legacy --meta:trunk main --meta:remotes.origin "$W/legacy.git")
 DATA=$(nd crud core:repo "Data" --name data --meta:trunk main --meta:remotes.origin "$W/data.git")
 # Work is of a kind of the hero's own whose doc says when one is dropped (## Drop when), so it is no durable kind: core's memo is.
 nd crud core:kind "Something the hero sets out to do" --name goal --meta:schema.additionalProperties true --section:"Drop when" - > /dev/null <<< "Once it is done, recorded on the doc it hangs from."

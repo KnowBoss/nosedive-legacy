@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Smoke-tests legacy as a hero wears it, through a real core launcher: seeds a hero, wears legacy at this checkout's
-# HEAD commit (core builds the cape from it), then runs the loop: jump -> commit -> pack -> jump -> land, and jump -> bail.
+# HEAD commit (core builds the cape from it), then runs the loop: jump -> commit -> pack -> jump -> land -> drop, and jump -> bail.
 # Usage: scripts/smoke.sh [<built nosedive-core checkout>] [<legacy checkout>]
 set -euo pipefail
 CORE_DIR=$(cd "${1:-${NOSEDIVE_CORE_DIR:-../nosedive-core}}" && pwd)
@@ -82,6 +82,12 @@ nd jump "$FEAT"
 DIVE=$(git symbolic-ref --short HEAD | sed -E 's/^nosedive-[0-9a-f]{12}-//')
 has "$ROOT_DIR/$FEAT.md" "rel: jumped.dive" "the feat does not link the dive as jumped"
 
+step "a plain crud commit on the dive branch is grouped under the dive (core's drop-takes-declared-links)"
+DIVE_NAME=$(sed -n 's/^name: //p' "$ROOT_DIR/$DIVE.md")
+nd crud "$FEAT" --gist "Ideas, under way" > /dev/null
+SUBJECT=$(git log -1 --format=%s)
+case "$SUBJECT" in "feat($DIVE_NAME): "*) echo "$SUBJECT" ;; *) fail "the commit is not grouped under the dive: $SUBJECT" ;; esac
+
 step "commit in the data checkout, then pack"
 echo work > workspace/data/work.md
 git -C workspace/data add -A
@@ -100,10 +106,21 @@ has "$ROOT_DIR/$FEAT.md" "rel: landed.dive" "the feat does not link the dive as 
 test "$(git -C "$W/data.git" log -1 --format=%s work/ideas)" = "some work" || fail "the work is not on data's work/ideas"
 test "$(git -C "$W/hero.git" rev-parse main)" = "$(git rev-parse main)" || fail "the hero's records were not pushed"
 
+step "drop the landed dive: recorded on its feat, the drop takes the feat's state link"
+nd crud "$FEAT" --section:"Dropped.$DIVE" - > /dev/null <<< "Smoke: landed its one commit on work/ideas."
+nd crud --drop "$DIVE" 2> "$W/drop.err"
+cat "$W/drop.err"
+test ! -e "$ROOT_DIR/$DIVE.md" || fail "the dive doc is still there"
+grep -q "$DIVE.md" "$ROOT_DIR/$FEAT.md" && fail "the feat still links the dropped dive"
+has "$W/drop.err" "^unlinked .*: landed.dive " "the drop did not report the link it took"
+has "$ROOT_DIR/$FEAT.md" "^### $DIVE$" "the feat lost the drop's record"
+# Jump wants the home pushed: its records go to its upstream.
+git push -q origin main
+
 step "jump another feat, then bail it"
 nd jump "$OTHER"
 nd bail --reason "smoke: bail works"
 has "$ROOT_DIR/$OTHER.md" "rel: bailed.dive" "the feat does not link the dive as bailed"
 test "$(git symbolic-ref --short HEAD)" = main || fail "bail did not return the hero to main"
 
-printf '\nsmoke passed: dive %s jumped, packed, jumped and landed; another jumped and bailed\n' "$DIVE"
+printf '\nsmoke passed: dive %s jumped, packed, jumped, landed and dropped; another jumped and bailed\n' "$DIVE"

@@ -60,7 +60,7 @@ export async function i0e2024913efd5dc8afe194f5650bda20(args: Args, ctx: Ctx): P
 		syncHome(hero, home, up);
 		token = tokenOf(hero, home);
 		const holder = `${me}#${token}`;
-		// Core's `next` lists no dive, a state link being no .feat link, so a refusal names the open ones itself.
+		// A refusal names the open dives itself, though next lists them too.
 		const links = diveLinks(hero);
 		const open = openDives(hero, links);
 		if (typeof args.ref === "string") {

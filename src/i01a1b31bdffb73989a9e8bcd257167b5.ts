@@ -18,7 +18,7 @@ const WORK_REPO = "01a15ba8-0bff-7ce3-83dc-e08af3633e26";
 const entries = (list: unknown): Record<string, unknown>[] => (Array.isArray(list) ? list.filter((entry) => entry && typeof entry === "object") : []) as Record<string, unknown>[];
 
 /** Whether the hero wears work: a cape it wears is registered by work's repo doc, or was built from work. */
-function wearsWork(hero: Bridge, core: Cape | undefined): boolean {
+export function wearsWork(hero: Bridge, core: Cape | undefined): boolean {
 	if (wornCapes(hero).some((cape) => cape.id === WORK_REPO)) return true;
 	return core !== undefined && configuredCapes(hero, core).some((cape) => cape.build?.owner === WORK_ID);
 }

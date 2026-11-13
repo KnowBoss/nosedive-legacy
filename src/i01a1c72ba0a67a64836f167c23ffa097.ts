@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, relative } from "node:path";
 import { unzipSync, zipSync } from "fflate";
 import type { Cape } from "nosedive-core";
@@ -98,7 +98,7 @@ export function moveLinks(hung: Hung, diveId: string, state: State): Doc[] {
 }
 
 /** Ignored files an install or a build remakes, which packs leave out. */
-const REBUILDABLE = /(^|\/)(node_modules|dist|build)\//;
+const REBUILDABLE = /(^|\/)(node_modules|dist|build|\.venv|venv|__pycache__)\//;
 
 /** One repo a feat or dive works in: its work goes to `branch`, a scope with none is read-only, and `ref` is its dive ref as last seen. */
 export type ScopeEntry = { repoId: string; branch?: string; ref?: string };
@@ -316,12 +316,22 @@ export function stamp(dir: string, range: string[], trailers: string[]): number 
 	return shas.length;
 }
 
-/** The ignored files a pack keeps: all but those an install or a build remakes, and none under a workspace. */
+/**
+ * The ignored files a pack keeps: all but those an install or a build remakes, and none under a workspace. Only regular
+ * files: git lists a symlink as a file, but a zip holds bytes, and one to a directory cannot be read as a file at all.
+ */
 function keepable(hero: Hero, dir: string): string[] {
 	const isSpared = spared(hero, dir);
+	const isFile = (file: string) => {
+		try {
+			return lstatSync(join(dir, file)).isFile();
+		} catch {
+			return false;
+		}
+	};
 	return runGit(dir, "ls-files", "--others", "--ignored", "--exclude-standard")
 		.text.split("\n")
-		.filter((file) => file && !REBUILDABLE.test(file) && !isSpared(file));
+		.filter((file) => file && !REBUILDABLE.test(file) && !isSpared(file) && isFile(file));
 }
 
 /** Whether a path in a checkout lies under a workspace it holds, its repo's own or the hero's, which jump and pack never touch. */

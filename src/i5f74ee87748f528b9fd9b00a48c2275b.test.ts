@@ -1,7 +1,8 @@
 // pack [<dive>]
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { unzipSync } from "fflate";
 import { join } from "node:path";
 import { test } from "node:test";
 import { i0e2024913efd5dc8afe194f5650bda20 as jump } from "./i0e2024913efd5dc8afe194f5650bda20.ts";
@@ -60,6 +61,24 @@ test("keeps the work on the dive's ref, uncommitted changes and all, packs ignor
 	assert.equal(git(f.checkout, "status", "--porcelain"), "M README.md\n?? draft.md", "uncommitted again");
 	assert.equal(readFileSync(join(f.checkout, "secrets.local"), "utf8"), "KEY=secret\n", "the feat's ignored files are back");
 	assert.doesNotMatch(f.doc(id), /packer:/);
+});
+
+test("packs ignored regular files only: a venv is remade, and a symlink, even to a directory, is not read", async () => {
+	const f = fixture("pack-symlinks");
+	await jump({ ref: f.featId }, f.ctx);
+	const id = f.onDeck();
+	f.commit(".gitignore", "secrets.local\n.venv/\nlinked\n");
+	writeFileSync(join(f.checkout, "secrets.local"), "KEY=secret\n");
+	mkdirSync(join(f.checkout, ".venv", "lib"), { recursive: true });
+	writeFileSync(join(f.checkout, ".venv", "lib", "site.py"), "remade by a venv\n");
+	symlinkSync("lib", join(f.checkout, ".venv", "lib64"));
+	symlinkSync(".venv", join(f.checkout, "linked"));
+
+	await pack({}, f.ctx);
+	const zip = join(f.hero, ".nosedive", "local", "packs", f.featId, "data.zip");
+	assert.deepEqual(Object.keys(unzipSync(new Uint8Array(readFileSync(zip)))), ["secrets.local"], "neither the venv nor a symlink is packed");
+	await jump({ ref: id }, f.ctx);
+	assert.equal(readFileSync(join(f.checkout, "secrets.local"), "utf8"), "KEY=secret\n");
 });
 
 test("never packs or clears a workspace the checkout's own config names, nor the checkouts in it", async () => {

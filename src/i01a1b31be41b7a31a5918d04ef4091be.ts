@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, unlinkSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import type { KbDoc, MigrationCtx } from "nosedive-core";
@@ -60,7 +60,34 @@ function remoteTip(dir: string, ref: string, name: string): string {
 	return listed.text.split(/\s/)[0] ?? "";
 }
 
-const patchCount = (n: number) => `${n} patch${n === 1 ? "" : "es"}`;
+/** The `git patch-id --stable` ids of what `input` holds, one per commit or diff; undefined when git fails. */
+function patchIds(cwd: string, input: string): string[] | undefined {
+	const result = spawnSync("git", ["patch-id", "--stable"], { cwd, input, encoding: "utf8", maxBuffer: 1 << 30 });
+	return result.status === 0 ? result.stdout.split(/\r?\n/).flatMap((line) => line.split(" ")[0] || []) : undefined;
+}
+
+/** The patches no commit of `base..tip` in `repo` has the patch-id of; every one on any git failure, so a doubt keeps. */
+function notHeld(repo: string, base: string, tip: string, patches: Patch[]): Patch[] {
+	const log = spawnSync("git", ["log", "-p", "--binary", "--format=%H", `${base}..${tip}`], { cwd: repo, encoding: "utf8", maxBuffer: 1 << 30 });
+	const held = log.status === 0 ? patchIds(repo, log.stdout) : undefined;
+	return patches.filter((patch) => {
+		let text = "";
+		try {
+			text = readFileSync(patch.file, "utf8");
+		} catch {
+			return true;
+		}
+		const ids = held && patchIds(repo, text);
+		return !ids || ids.length === 0 || !ids.every((id) => held.includes(id));
+	});
+}
+
+/** What the dive's line says of a ref already on origin, and whether its chain is spent: it is when the ref holds every patch. */
+function already(who: string, missing: Patch[]): string {
+	return missing.length === 0 ? `- ${who}: already on origin` : `- ${who}: already on origin, not holding ${missing.map((patch) => patch.rel).join(", ")}: kept`;
+}
+
+const patchCount =(n: number) => `${n} patch${n === 1 ? "" : "es"}`;
 
 /** Applies the patches onto `base` in a scratch worktree of `repo` and pushes the result to `ref`; says why when it cannot apply, else what it pushed. */
 function build(repo: string, base: string, patches: Patch[], wip: string, ref: string, name: string, identity: Record<string, string>): { sha: string } | { why: string } {
@@ -186,10 +213,12 @@ export function i01a1b31be41b7a31a5918d04ef4091be(dir: string, ctx: MigrationCtx
 						continue;
 					}
 					const cache = cacheOf(dir, repo);
-					// Only this migration and pack write the ref, so origin holds the work: its patches are spent as pushed ones are.
-					if (remoteTip(cache, ref, repoName) !== "") {
-						lines.push(`- ${repoName}: already on origin`);
-						if (chain) spent.push(chain);
+					// A ref pushed by a trial run or an earlier pack may lack patches packed since: they are spent only when it holds every one.
+					const tip = remoteTip(cache, ref, repoName);
+					if (tip !== "") {
+						const missing = notHeld(cache, pin, tip, patches);
+						lines.push(already(repoName, missing));
+						if (chain && missing.length === 0) spent.push(chain);
 						continue;
 					}
 					if (!git(cache, ["rev-parse", "--verify", "-q", `${pin}^{commit}`]).ok && !git(cache, ["fetch", "-q", "origin", pin]).ok) {
@@ -218,11 +247,15 @@ export function i01a1b31be41b7a31a5918d04ef4091be(dir: string, ctx: MigrationCtx
 			else if (own && own.patches.length > 0) {
 				const fetched = git(dir, ["fetch", "-q", "origin"]);
 				if (!fetched.ok) throw new Wait(`cannot fetch the hero: ${fetched.text}`);
-				if (remoteTip(dir, ref, "the hero") !== "") {
-					lines.push("- hero: already on origin");
-					spent.push(own);
+				const trunk = git(dir, ["rev-parse", "--verify", "-q", "refs/remotes/origin/HEAD"]).text || git(dir, ["rev-parse", "HEAD"]).text;
+				const tip = remoteTip(dir, ref, "the hero");
+				if (tip !== "") {
+					// The default fetch leaves out refs/nosedive/*; without the ref or a merge-base, nothing is held.
+					const base = git(dir, ["fetch", "-q", "origin", ref]).ok ? git(dir, ["merge-base", trunk, tip]) : { ok: false, text: "" };
+					const missing = base.ok ? notHeld(dir, base.text, tip, own.patches) : own.patches;
+					lines.push(already("hero", missing));
+					if (missing.length === 0) spent.push(own);
 				} else {
-					const trunk = git(dir, ["rev-parse", "--verify", "-q", "refs/remotes/origin/HEAD"]).text || git(dir, ["rev-parse", "HEAD"]).text;
 					const built = build(dir, trunk, own.patches, wip, ref, "the hero", identity);
 					if ("why" in built) {
 						ctx.out(`legacy-patches: ${name}: the hero: ${built.why}, so it is passed over`);

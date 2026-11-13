@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { i01a1335480c776ba8945020d0af333eb as mintUuid } from "nosedive-core";
 import { i01a13354894273b1be253424511ba82c as commitFiles } from "nosedive-core";
-import { fixture, git, WORK_ID } from "../test/harness.ts";
+import { fixture, git, tempDir, WORK_ID } from "../test/harness.ts";
 import { i01a1b31be41b7a31a5918d04ef4091be as legacyPatches } from "./i01a1b31be41b7a31a5918d04ef4091be.ts";
 
 /** A legacy dive on data, pinned at the first commit, its packed work two patches: the second commit, then an uncommitted edit; and one bridge-wip patch of the hero's. */
@@ -181,25 +181,68 @@ test("a patch that no longer applies is passed over: the dive says so and keeps 
 	assert.equal(again.out.length, 0);
 });
 
-test("a ref origin has already is said to be, and its patches are spent as pushed ones are, nothing having been pushed for them", () => {
+/** Puts `ref` on `origin` as its main with one more commit writing `file`, as an earlier run or a pack leaves a dive ref; its patch-ids are those of what it holds. */
+function pushRef(origin: string, ref: string, file: string, text: string): string {
+	const clone = join(tempDir("legacy-patches-ref"), "clone");
+	git(origin, "clone", "-q", origin, clone);
+	writeFileSync(join(clone, file), text);
+	git(clone, "add", "-A");
+	git(clone, "-c", "user.name=T", "-c", "user.email=t@example.com", "commit", "-q", "-m", "held");
+	git(clone, "push", "-q", "origin", `HEAD:${ref}`);
+	return git(clone, "rev-parse", "HEAD");
+}
+
+test("a ref origin has already and holds every patch of the chain, by patch-id, is said to be, and its patches are spent, nothing having been pushed for them", () => {
 	const { f, dive, ref } = packed("legacy-patches-there-already");
-	git(f.remote, "update-ref", ref, f.first);
+	// The second commit is on main, and the uncommitted edit is a commit of the ref.
+	const tip = pushRef(f.remote, ref, "README.md", "three\n");
 	legacyPatches(f.hero, say().ctx);
 	const text = readFileSync(f.path(dive), "utf8");
 	assert.match(text, new RegExp(`${SECTION}- data: already on origin\\n- hero: pushed 1 patch to ${ref}\\n$`));
-	assert.equal(git(f.remote, "rev-parse", ref), f.first, "left as it is");
+	assert.equal(git(f.remote, "rev-parse", ref), tip, "left as it is");
 	assert.doesNotMatch(text, /rel: patch/, "no patch link is left");
 	assert.equal(memosOf(f).length, 0, "its memos are removed with the hero's");
 	for (const name of ["commit", "dirty", "bridge"]) assert.equal(existsSync(join(f.hero, "kb", "artifacts", `${name}.patch`)), false, `${name}.patch is gone`);
 });
 
-test("a hero ref origin has already is spent too", () => {
-	const { f, dive, ref, heroOrigin } = packed("legacy-patches-hero-already");
-	git(heroOrigin, "update-ref", ref, git(heroOrigin, "rev-parse", "main"));
+test("a ref pushed by an earlier run, and a patch memo packed onto the dive since, keeps every patch of the chain and says which the ref does not hold", () => {
+	const { f, dive, ref } = packed("legacy-patches-there-stale");
+	const tip = pushRef(f.remote, ref, "README.md", "three\n");
+	const seed = join(f.hero, "..", "data-seed");
+	writeFileSync(join(seed, "extra.md"), "more\n");
+	git(seed, "add", "-A");
+	git(seed, "-c", "user.name=T", "-c", "user.email=t@example.com", "commit", "-q", "-m", "extra");
+	writeFileSync(join(f.hero, "kb", "artifacts", "extra.patch"), git(seed, "format-patch", "-1", "--stdout", "--binary", "--no-signature") + "\n");
+	git(seed, "reset", "-q", "--hard", "HEAD^");
+	const extra = mintUuid();
+	writeFileSync(f.path(extra), `---\nkind: memo\nid: ${extra}\nname: abcdef123456.data\ngist: "Patch"\nmeta:\n  patch: kb/artifacts/extra.patch\n---\n\n# Patch\n`);
+	writeFileSync(f.path(dive), readFileSync(f.path(dive), "utf8").replace("links:\n", `links:\n  - kb/${extra}.md:\n      rel: patch\n`));
+	f.commit("a patch packed since");
 	legacyPatches(f.hero, say().ctx);
-	assert.match(readFileSync(f.path(dive), "utf8"), new RegExp(`${SECTION}- data: pushed 2 patches to ${ref}\\n- hero: already on origin\\n$`));
-	assert.equal(memosOf(f).length, 0);
-	assert.equal(existsSync(join(f.hero, "kb", "artifacts", "bridge.patch")), false);
+
+	const text = readFileSync(f.path(dive), "utf8");
+	assert.match(text, new RegExp(`${SECTION}- data: already on origin, not holding kb/artifacts/extra\\.patch: kept\\n- hero: pushed 1 patch to ${ref}\\n$`));
+	assert.equal(git(f.remote, "rev-parse", ref), tip, "left as it is");
+	assert.equal(memosOf(f).length, 3, "all of its chain's memos are kept, the hero's removed");
+	assert.equal((text.match(/rel: patch/g) ?? []).length, 2, "and its patch links");
+	for (const name of ["commit", "dirty", "extra"]) assert.ok(existsSync(join(f.hero, "kb", "artifacts", `${name}.patch`)), `${name}.patch is kept`);
+});
+
+test("a hero ref origin has already and holds the patch is spent too; one that does not hold it keeps it, and says so", () => {
+	const held = packed("legacy-patches-hero-already");
+	pushRef(held.heroOrigin, held.ref, "notes.md", "a note\n");
+	legacyPatches(held.f.hero, say().ctx);
+	assert.match(readFileSync(held.f.path(held.dive), "utf8"), new RegExp(`${SECTION}- data: pushed 2 patches to ${held.ref}\\n- hero: already on origin\\n$`));
+	assert.equal(memosOf(held.f).length, 0);
+	assert.equal(existsSync(join(held.f.hero, "kb", "artifacts", "bridge.patch")), false);
+
+	const stale = packed("legacy-patches-hero-stale");
+	const tip = pushRef(stale.heroOrigin, stale.ref, "other.md", "not the note\n");
+	legacyPatches(stale.f.hero, say().ctx);
+	assert.match(readFileSync(stale.f.path(stale.dive), "utf8"), new RegExp(`${SECTION}- data: pushed 2 patches to ${stale.ref}\\n- hero: already on origin, not holding kb/artifacts/bridge\\.patch: kept\\n$`));
+	assert.equal(git(stale.heroOrigin, "rev-parse", stale.ref), tip, "left as it is");
+	assert.equal(memosOf(stale.f).length, 1, "the hero's memo is kept, data's removed");
+	assert.ok(existsSync(join(stale.f.hero, "kb", "artifacts", "bridge.patch")));
 });
 
 /** The id of the patch memo named so. */

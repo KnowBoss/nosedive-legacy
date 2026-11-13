@@ -1,10 +1,9 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { i01a1335480c776ba8945020d0af333eb as mintUuid } from "nosedive-core";
 import { i01a13354894273b1be253424511ba82c as commitFiles } from "nosedive-core";
-import { passedOver } from "./i01a1c72ba0a67a64836f167c23ffa097.ts";
 import { fixture, git, WORK_ID } from "../test/harness.ts";
 import { i01a1b31be41b7a31a5918d04ef4091be as legacyPatches } from "./i01a1b31be41b7a31a5918d04ef4091be.ts";
 
@@ -173,7 +172,6 @@ test("a patch that no longer applies is passed over: the dive says so and keeps 
 	assert.equal(memosOf(f).length, 2, "its two memos are kept, the hero's removed");
 	assert.ok(existsSync(file) && existsSync(join(f.hero, "kb", "artifacts", "dirty.patch")));
 	assert.equal(existsSync(join(f.hero, "kb", "artifacts", "bridge.patch")), false);
-	assert.deepEqual(passedOver(text).map((line) => line.slice(0, 22)), ["data: passed over: a p"]);
 
 	// Migrated is migrated: not built again, nor asked of origin, though origin is now out of reach.
 	const doc = join(f.hero, ".nosedive", "repos", `${f.repoId}.md`);
@@ -183,26 +181,153 @@ test("a patch that no longer applies is passed over: the dive says so and keeps 
 	assert.equal(again.out.length, 0);
 });
 
-test("a ref origin has already is said to be, and its patches are kept, nothing having been pushed for them", () => {
+test("a ref origin has already is said to be, and its patches are spent as pushed ones are, nothing having been pushed for them", () => {
 	const { f, dive, ref } = packed("legacy-patches-there-already");
 	git(f.remote, "update-ref", ref, f.first);
 	legacyPatches(f.hero, say().ctx);
 	const text = readFileSync(f.path(dive), "utf8");
 	assert.match(text, new RegExp(`${SECTION}- data: already on origin\\n- hero: pushed 1 patch to ${ref}\\n$`));
 	assert.equal(git(f.remote, "rev-parse", ref), f.first, "left as it is");
-	assert.match(text, /rel: patch/);
-	assert.equal(memosOf(f).length, 2);
+	assert.doesNotMatch(text, /rel: patch/, "no patch link is left");
+	assert.equal(memosOf(f).length, 0, "its memos are removed with the hero's");
+	for (const name of ["commit", "dirty", "bridge"]) assert.equal(existsSync(join(f.hero, "kb", "artifacts", `${name}.patch`)), false, `${name}.patch is gone`);
 });
 
-test("a chain whose memo is gone is passed over whole and kept, and the repo still gets its pin", () => {
-	const { f, dive, ref } = packed("legacy-patches-gone");
-	const dirty = memosOf(f).find((name) => /name: dirty\.data/.test(readFileSync(join(f.hero, "kb", name), "utf8")))!;
-	rmSync(join(f.hero, "kb", dirty));
-	f.commit("a memo lost");
+test("a hero ref origin has already is spent too", () => {
+	const { f, dive, ref, heroOrigin } = packed("legacy-patches-hero-already");
+	git(heroOrigin, "update-ref", ref, git(heroOrigin, "rev-parse", "main"));
 	legacyPatches(f.hero, say().ctx);
+	assert.match(readFileSync(f.path(dive), "utf8"), new RegExp(`${SECTION}- data: pushed 2 patches to ${ref}\\n- hero: already on origin\\n$`));
+	assert.equal(memosOf(f).length, 0);
+	assert.equal(existsSync(join(f.hero, "kb", "artifacts", "bridge.patch")), false);
+});
+
+/** The id of the patch memo named so. */
+const memoNamed = (f: ReturnType<typeof packed>["f"], name: string) => memosOf(f).find((file) => new RegExp(`\\nname: ${name.replace(".", "\\.")}\\n`).test(readFileSync(join(f.hero, "kb", file), "utf8")))!.slice(0, -3);
+
+test("a chain that breaks at a missing memo passes its whole repo over, every chain of it, saying where it breaks and naming the patches found; nothing of that repo is pushed or removed, the hero's still is", () => {
+	const { f, dive, ref } = packed("legacy-patches-gone");
+	const [dirty, commit] = [memoNamed(f, "dirty.data"), memoNamed(f, `${git(f.remote, "rev-parse", "main").slice(0, 12)}.data`)];
+	rmSync(join(f.hero, "kb", `${dirty}.md`));
+	// A second chain of data's, which is whole, and is passed over with the broken one.
+	const other = mintUuid();
+	writeFileSync(f.path(other), `---\nkind: memo\nid: ${other}\nname: dirty.data\ngist: "Patch"\nmeta:\n  patch: kb/artifacts/dirty.patch\n---\n\n# Patch\n`);
+	f.link(dive, other, "rel: patch");
+	f.commit("a memo lost");
+	const { out, ctx } = say();
+	legacyPatches(f.hero, ctx);
 	const text = readFileSync(f.path(dive), "utf8");
-	assert.match(text, new RegExp(`${SECTION}- patches: passed over: its patch memo ${dirty.slice(0, -3)} is gone; its work needs patching by hand on jump, from kb/artifacts/commit\\.patch\\n- data: pushed 0 patches to ${ref}\\n- hero: pushed 1 patch to ${ref}\\n$`));
-	assert.equal(git(f.remote, "rev-parse", ref), f.first);
-	assert.match(text, /rel: patch/);
-	assert.ok(existsSync(join(f.hero, "kb", "artifacts", "commit.patch")));
+	assert.match(text, new RegExp(`${SECTION}- data: passed over: its patch chain breaks at memo ${dirty}, so its later patches are not known; its work needs patching by hand on jump, from kb/artifacts/dirty\\.patch, kb/artifacts/commit\\.patch\\n- hero: pushed 1 patch to ${ref}\\n$`));
+	assert.ok(out.includes(`legacy-patches: ideas.packed's patch memo ${dirty} is gone, so its repo is passed over`));
+	assert.equal(git(f.remote, "ls-remote", ".", ref), "", "not even its pin is pushed");
+	assert.match(text, new RegExp(`${commit}\\.md:\\n\\s+rel: patch`), "its chains stay linked");
+	assert.match(text, new RegExp(`${other}\\.md:\\n\\s+rel: patch`));
+	assert.ok(existsSync(join(f.hero, "kb", "artifacts", "commit.patch")) && existsSync(join(f.hero, "kb", "artifacts", "dirty.patch")));
+	assert.equal(existsSync(f.path(commit)) && existsSync(f.path(other)), true);
+});
+
+test("a chain whose first memo is gone is of no known repo, so every repo of the dive and the hero are passed over, and nothing is pushed or removed", () => {
+	const { f, dive, ref, heroOrigin } = packed("legacy-patches-gone-all");
+	const commit = memoNamed(f, `${git(f.remote, "rev-parse", "main").slice(0, 12)}.data`);
+	rmSync(join(f.hero, "kb", `${commit}.md`));
+	f.commit("a head lost");
+	const { out, ctx } = say();
+	legacyPatches(f.hero, ctx);
+	const text = readFileSync(f.path(dive), "utf8");
+	const why = `its patch chain breaks at memo ${commit}, so its later patches are not known`;
+	assert.match(text, new RegExp(`${SECTION}- data: passed over: ${why}\\n- hero: passed over: ${why}; its work needs patching by hand on jump, from kb/artifacts/bridge\\.patch\\n$`));
+	assert.ok(out.includes(`legacy-patches: ideas.packed's patch memo ${commit} is gone, so every repo of the dive and the hero are passed over`));
+	assert.equal(git(f.remote, "ls-remote", ".", ref), "");
+	assert.equal(git(heroOrigin, "ls-remote", ".", ref), "");
+	assert.equal(memosOf(f).length, 2, "the memos left are kept");
+	assert.ok(existsSync(join(f.hero, "kb", "artifacts", "bridge.patch")));
+});
+
+test("a dive the migration waits on has the dives it finished before recorded, and committed by the migration itself, which returns nothing; the next run does the rest", () => {
+	const { f, dive, heroOrigin } = packed("legacy-patches-part");
+	// The first dive has data's work only; the second, minted later, the hero's too.
+	const bridge = memoNamed(f, "bridge-wip.abcdef");
+	writeFileSync(f.path(dive), readFileSync(f.path(dive), "utf8").replace(new RegExp(`  - kb/${bridge}\\.md:\\n      rel: patch\\n`), ""));
+	const [second, bridge2] = [mintUuid(), mintUuid()];
+	writeFileSync(join(f.hero, "kb", "artifacts", "bridge2.patch"), readFileSync(join(f.hero, "kb", "artifacts", "bridge.patch"), "utf8"));
+	writeFileSync(f.path(bridge2), `---\nkind: memo\nid: ${bridge2}\nname: bridge-wip.second\ngist: "Patch"\nmeta:\n  patch: kb/artifacts/bridge2.patch\n---\n\n# Patch\n`);
+	writeFileSync(f.path(second), readFileSync(f.path(dive), "utf8").replace(`id: ${dive}`, `id: ${second}`).replace("name: ideas.packed", "name: ideas.second").replace(/links:\n[^]*?---/, `links:\n  - kb/${bridge2}.md:\n      rel: patch\n---`));
+	f.commit("two dives");
+	const away = `${heroOrigin}-away`;
+	renameSync(heroOrigin, away);
+
+	const { out, ctx } = say();
+	assert.equal(legacyPatches(f.hero, ctx), undefined);
+	assert.ok(out.some((line) => line.startsWith("legacy-patches: waiting, since cannot fetch the hero")));
+	assert.match(readFileSync(f.path(dive), "utf8"), new RegExp(`${SECTION}- data: pushed 2 patches to `), "the dive finished is recorded");
+	assert.equal(git(f.hero, "log", "-1", "--format=%s"), "migrate: legacy:legacy-patches (in part)");
+	assert.equal(git(f.hero, "status", "--porcelain", "--", "kb"), "", "and committed");
+	assert.equal(existsSync(join(f.hero, "kb", "artifacts", "commit.patch")), false, "its patches are removed");
+	assert.doesNotMatch(readFileSync(f.path(second), "utf8"), /migrated/, "the waiting one gets nothing");
+	assert.ok(existsSync(f.path(bridge2)));
+
+	renameSync(away, heroOrigin);
+	const rest = legacyPatches(f.hero, say().ctx)!;
+	assert.ok(rest.includes(f.path(second)));
+	assert.match(readFileSync(f.path(second), "utf8"), new RegExp(`${SECTION}- data: already on origin\\n- hero: pushed 1 patch to `));
+	assert.equal(existsSync(f.path(bridge2)), false);
+});
+
+test("a scratch check-out that fails is a wait, recording nothing, not a pass-over", () => {
+	const { f, dive } = packed("legacy-patches-checkout");
+	// A cache of data whose first commit lacks its file: cloned, then the blob of README.md at that commit deleted.
+	const cache = join(process.env.NOSEDIVE_USER_DIR!, "cache", `${f.repoId}.git`);
+	git(f.hero, "clone", "-q", "--bare", f.remote, cache);
+	const blob = git(f.remote, "rev-parse", `${f.first}:README.md`);
+	const loose = join(cache, "objects", blob.slice(0, 2), blob.slice(2));
+	chmodSync(loose, 0o666);
+	rmSync(loose);
+	const { out, ctx } = say();
+	assert.equal(legacyPatches(f.hero, ctx), undefined);
+	assert.ok(out.some((line) => line.startsWith("legacy-patches: waiting, since cannot check out")), out.join("\n"));
+	assert.doesNotMatch(readFileSync(f.path(dive), "utf8"), /migrated/);
+});
+
+test("uncommitted work that cannot be committed is a wait, recording nothing, not a pass-over", () => {
+	const { f, dive, second } = packed("legacy-patches-commit");
+	// The chain is the uncommitted work alone, on a pin that has what it was made on, so only its commit is tried.
+	const [dirty, commit] = [memoNamed(f, "dirty.data"), memoNamed(f, `${second.slice(0, 12)}.data`)];
+	writeFileSync(f.path(dive), readFileSync(f.path(dive), "utf8").replace(`kb/${commit}.md`, `kb/${dirty}.md`).replace(`ref: ${f.first}`, `ref: ${second}`));
+	f.commit("dirty head");
+	const keep = { count: process.env.GIT_CONFIG_COUNT, k0: process.env.GIT_CONFIG_KEY_0, v0: process.env.GIT_CONFIG_VALUE_0, k1: process.env.GIT_CONFIG_KEY_1, v1: process.env.GIT_CONFIG_VALUE_1 };
+	Object.assign(process.env, { GIT_CONFIG_COUNT: "2", GIT_CONFIG_KEY_0: "commit.gpgsign", GIT_CONFIG_VALUE_0: "true", GIT_CONFIG_KEY_1: "gpg.program", GIT_CONFIG_VALUE_1: "no-such-gpg-program" });
+	const { out, ctx } = say();
+	try {
+		assert.equal(legacyPatches(f.hero, ctx), undefined);
+	} finally {
+		for (const [name, value] of [["GIT_CONFIG_COUNT", keep.count], ["GIT_CONFIG_KEY_0", keep.k0], ["GIT_CONFIG_VALUE_0", keep.v0], ["GIT_CONFIG_KEY_1", keep.k1], ["GIT_CONFIG_VALUE_1", keep.v1]] as const) {
+			if (value === undefined) delete process.env[name];
+			else process.env[name] = value;
+		}
+	}
+	assert.ok(out.some((line) => line.startsWith("legacy-patches: waiting, since cannot commit data's uncommitted work")), out.join("\n"));
+	assert.doesNotMatch(readFileSync(f.path(dive), "utf8"), /migrated/);
+});
+
+test("a section headed otherwise than as record-dive heads one is not a migrated one: `## DB migrated` does not keep a dive from being migrated", () => {
+	const { f, dive, ref } = packed("legacy-patches-heading");
+	const path = f.path(dive);
+	writeFileSync(path, `${readFileSync(path, "utf8")}\n## DB migrated\n\nNotes on moving the database.\n`);
+	f.commit("a heading that looks migrated");
+	assert.ok(legacyPatches(f.hero, say().ctx)!.includes(path));
+	assert.ok(git(f.remote, "rev-parse", ref), "the dive is built");
+	assert.match(readFileSync(path, "utf8"), new RegExp(`${SECTION}- data: pushed 2 patches`));
+});
+
+test("a links entry holding a spent patch head and other keys keeps the other keys", () => {
+	const { f, dive } = packed("legacy-patches-entry");
+	const commit = memoNamed(f, `${git(f.remote, "rev-parse", "main").slice(0, 12)}.data`);
+	const path = f.path(dive);
+	writeFileSync(path, readFileSync(path, "utf8").replace(`  - kb/${commit}.md:\n      rel: patch\n`, `  - kb/${commit}.md:\n      rel: patch\n    kb/${f.featId}.md:\n      rel: related\n`));
+	f.commit("a shared entry");
+	legacyPatches(f.hero, say().ctx);
+	const text = readFileSync(path, "utf8");
+	assert.match(text, new RegExp(`kb/${f.featId}\\.md:\\n\\s+rel: related`), "the other key stays");
+	assert.doesNotMatch(text, /rel: patch/);
+	assert.equal(text.includes(`kb/${commit}.md`), false, "the spent head goes");
 });

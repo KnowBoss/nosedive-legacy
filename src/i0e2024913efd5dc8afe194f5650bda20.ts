@@ -11,7 +11,7 @@ import { i01a147171f057d019118aaa1f269f5fd as findKind } from "nosedive-core";
 import { i01a18e2a3b4b798d98068d4778a158e6 as docKind } from "nosedive-core";
 import { pinOf } from "nosedive-core";
 import { i01a1335483aa776cb84df698b04adc06 as writeKbDoc } from "nosedive-core";
-import { LEGACY_ID, isDive as isLegacyDive, describeDive, diveBranch, diveBranches, diveLinks, emailOf, featIdOf, fetchAll, fetchUpstream, heroBranch, heroDoc, homeOf, homeUpstream, isDiveRef, isOver, keyOf, metaOf, openDives, orphan, parseDiveBranch, passedOver, pushRecord, readScopes, repoDoc, scopesWith, stateLinksOf, swapIgnored, syncHome, tokenOf, trunkOf, isWip, type Hung, type ScopeEntry, type State } from "./i01a1c72ba0a67a64836f167c23ffa097.ts";
+import { LEGACY_ID, isDive as isLegacyDive, describeDive, diveBranch, diveBranches, diveLinks, emailOf, featIdOf, fetchAll, fetchUpstream, heroBranch, heroDoc, homeOf, homeUpstream, isDiveRef, isOver, keyOf, metaOf, openDives, orphan, parseDiveBranch, patchWarnings, pushRecord, readScopes, repoDoc, scopesWith, stateLinksOf, swapIgnored, syncHome, tokenOf, trunkOf, isWip, type Hung, type ScopeEntry, type State } from "./i01a1c72ba0a67a64836f167c23ffa097.ts";
 import { i01a1c72ba0b57a0c80e3fdd641d001a8 as recordDive, type Doc, type Hero } from "./i01a1c72ba0b57a0c80e3fdd641d001a8.ts";
 import { i01a1c72ba0c37d27a058e908481307c3 as runGit } from "./i01a1c72ba0c37d27a058e908481307c3.ts";
 
@@ -232,8 +232,8 @@ export async function i0e2024913efd5dc8afe194f5650bda20(args: Args, ctx: Ctx): P
 	ctx.out(`dive  ${shown(dive.path)}`);
 	if (feat) ctx.out(`feat  ${shown(feat.path)}`);
 	for (const scope of plan) ctx.out(`${scope.name}  ${shown(scope.dir)}`);
-	// Work the legacy-patches migration could not push needs patching by hand; said last but for the nudge.
-	for (const line of passedOver(dive.body)) ctx.err(`warning: ${line}`);
+	// The legacy-patches migration removes only the patch links of work it pushed; what is left needs patching by hand, said last but for the nudge.
+	for (const line of patchWarnings(hero, dive)) ctx.err(line);
 	// The agent that jumped does the work, but puts it down only on the pilot's say (jump-starts-the-work).
 	const brief = /(?:^|\n)## Brief\n/.test(dive.body) || !feat ? dive : feat;
 	ctx.out(`Now do the dive's work, from its brief, ${shown(brief.path)}, to its feat's Done when; pack or land it only when the pilot asks.`);

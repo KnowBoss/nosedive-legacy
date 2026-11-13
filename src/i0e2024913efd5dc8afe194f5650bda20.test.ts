@@ -544,18 +544,23 @@ test("a dive legacy left held by a bare email is taken over by a checkout of tha
 	assert.match(f.doc(id), /\n  diver: diver@example\.com#[0-9a-f]{12}\n/);
 });
 
-test("a dive whose migrated section passed work over is warned of on stderr, after the paths and before the nudge; a dive that was pushed or never migrated is not", async () => {
+test("a dive that still has patch links is warned of on stderr from them, after the paths and before the nudge, whatever its sections say; a dive with none is not", async () => {
 	const f = fixture("jump-migrated");
 	const over = f.legacyDive();
 	const pushed = f.legacyDive();
-	const section = (id: string, lines: string[]) => {
-		const path = join(f.hero, "kb", `${id}.md`);
-		writeFileSync(path, `${readFileSync(path, "utf8")}\n## 2026-11-12T10:00:00.000Z migrated\n\n${lines.join("\n")}\n`);
-	};
-	const why = "- data: passed over: a patch no longer applies: patch failed; its work needs patching by hand on jump, from kb/artifacts/a.patch, kb/artifacts/b.patch";
-	section(over, [why, "- hero: pushed 1 patch to refs/nosedive/x/dives/y"]);
-	section(pushed, ["- data: pushed 2 patches to refs/nosedive/x/dives/y"]);
-	git(f.hero, "commit", "-q", "-am", "migrated");
+	// A chain of two patches, and a chain whose head memo is gone.
+	const [first, second, gone] = [mintUuid(), mintUuid(), mintUuid()];
+	for (const [id, file] of [[first, "a"], [second, "b"]] as const) {
+		writeFileSync(join(f.hero, "kb", `${id}.md`), `---\nkind: memo\nid: ${id}\nname: ${file}.data\ngist: "Patch"\nmeta:\n  patch: kb/artifacts/${file}.patch\n---\n\n# Patch\n`);
+	}
+	f.linkFrom(first, second, "next");
+	f.linkFrom(over, first, "patch");
+	f.linkFrom(over, gone, "patch");
+	// Its section says nothing of what was passed over, and has no `passed over` line, as one of an older migration might: the links are what is read.
+	const path = join(f.hero, "kb", `${pushed}.md`);
+	writeFileSync(path, `${readFileSync(path, "utf8")}\n## 2026-11-12T10:00:00.000Z migrated\n\n- data: passed over: a patch no longer applies: patch failed; its work needs patching by hand on jump, from kb/artifacts/z.patch\n`);
+	git(f.hero, "add", "-A");
+	git(f.hero, "commit", "-q", "-m", "patch links");
 	git(f.hero, "push", "-q", "origin", "HEAD:main");
 
 	await jump({ ref: pushed }, f.ctx);
@@ -564,7 +569,11 @@ test("a dive whose migrated section passed work over is warned of on stderr, aft
 
 	f.out.length = 0;
 	await jump({ ref: over }, f.ctx);
-	assert.deepEqual(f.err, ["warning: data: passed over: a patch no longer applies: patch failed; its work needs patching by hand on jump, from kb/artifacts/a.patch, kb/artifacts/b.patch"]);
+	const by = "apply it by hand, then remove the dive's patch links";
+	assert.deepEqual(f.err, [
+		`warning: work legacy-patches passed over is left in kb/artifacts/a.patch, kb/artifacts/b.patch; ${by}`,
+		`warning: work legacy-patches passed over is left in no patch file, and its chain breaks at memo ${gone}, so its later patches are not known; ${by}`,
+	]);
 	assert.equal(f.out.at(-1), nudge(`kb/${over}.md`), "the nudge stays last");
 	assert.ok(f.out.some((line) => line.startsWith("dive  ")), "after the paths");
 });

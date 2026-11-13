@@ -71,8 +71,9 @@ test("packs ignored regular files only: a venv is remade, and a symlink, even to
 	writeFileSync(join(f.checkout, "secrets.local"), "KEY=secret\n");
 	mkdirSync(join(f.checkout, ".venv", "lib"), { recursive: true });
 	writeFileSync(join(f.checkout, ".venv", "lib", "site.py"), "remade by a venv\n");
-	symlinkSync("lib", join(f.checkout, ".venv", "lib64"));
-	symlinkSync(".venv", join(f.checkout, "linked"));
+	// Junctions, which Windows lets anyone make; elsewhere the type is ignored and these are plain symlinks.
+	symlinkSync(join(f.checkout, ".venv", "lib"), join(f.checkout, ".venv", "lib64"), "junction");
+	symlinkSync(join(f.checkout, ".venv"), join(f.checkout, "linked"), "junction");
 
 	await pack({}, f.ctx);
 	const zip = join(f.hero, ".nosedive", "local", "packs", f.featId, "data.zip");

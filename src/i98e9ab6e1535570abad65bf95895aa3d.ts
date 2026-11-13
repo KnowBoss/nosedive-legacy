@@ -30,4 +30,9 @@ export async function i98e9ab6e1535570abad65bf95895aa3d(ctx: GateCtx): Promise<v
 	if (jumped && changed(before, after, "meta.feat")) {
 		throw new Error(`dive ${name} was jumped on its feat, so it keeps it: bail it, and mint a dive on the other feat`);
 	}
+	// A held dive's doc changes only through the loop (turn, pack, land and bail), none of which runs crud's gates (held-dive-doc-edits).
+	if (!(state && isOver(state)) && ((typeof meta.diver === "string" && meta.diver) || state === "jumped")) {
+		const by = typeof meta.diver === "string" && meta.diver ? ` by ${meta.diver.split("#")[0]}` : "";
+		throw new Error(`dive ${name} is held${by}, so its doc changes only through the loop: record a turn with \`pass --turn\` instead, or pack it first`);
+	}
 }

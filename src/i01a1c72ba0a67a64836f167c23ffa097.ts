@@ -711,3 +711,17 @@ export function pushRecord(hero: Hero, record: () => void): void {
 		}
 	}
 }
+
+/** The heading of the section legacy-patches appends to a dive it migrated. */
+export const MIGRATED = /^## \S+ migrated[ \t]*$/m;
+
+/** What a dive's `migrated` section says was passed over, a line each, as the migration wrote it without its dash. */
+export function passedOver(body: string): string[] {
+	let inside = false;
+	const lines: string[] = [];
+	for (const line of body.split(/\r?\n/)) {
+		if (line.startsWith("## ")) inside = MIGRATED.test(line);
+		else if (inside && line.includes(": passed over: ")) lines.push(line.replace(/^- /, ""));
+	}
+	return lines;
+}

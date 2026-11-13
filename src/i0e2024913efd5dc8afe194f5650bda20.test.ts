@@ -543,3 +543,28 @@ test("a dive legacy left held by a bare email is taken over by a checkout of tha
 	assert.equal(f.onDeck(), id);
 	assert.match(f.doc(id), /\n  diver: diver@example\.com#[0-9a-f]{12}\n/);
 });
+
+test("a dive whose migrated section passed work over is warned of on stderr, after the paths and before the nudge; a dive that was pushed or never migrated is not", async () => {
+	const f = fixture("jump-migrated");
+	const over = f.legacyDive();
+	const pushed = f.legacyDive();
+	const section = (id: string, lines: string[]) => {
+		const path = join(f.hero, "kb", `${id}.md`);
+		writeFileSync(path, `${readFileSync(path, "utf8")}\n## 2026-11-12T10:00:00.000Z migrated\n\n${lines.join("\n")}\n`);
+	};
+	const why = "- data: passed over: a patch no longer applies: patch failed; its work needs patching by hand on jump, from kb/artifacts/a.patch, kb/artifacts/b.patch";
+	section(over, [why, "- hero: pushed 1 patch to refs/nosedive/x/dives/y"]);
+	section(pushed, ["- data: pushed 2 patches to refs/nosedive/x/dives/y"]);
+	git(f.hero, "commit", "-q", "-am", "migrated");
+	git(f.hero, "push", "-q", "origin", "HEAD:main");
+
+	await jump({ ref: pushed }, f.ctx);
+	assert.deepEqual(f.err, [], "pushed work needs nothing said");
+	await pack({}, f.ctx);
+
+	f.out.length = 0;
+	await jump({ ref: over }, f.ctx);
+	assert.deepEqual(f.err, ["warning: data: passed over: a patch no longer applies: patch failed; its work needs patching by hand on jump, from kb/artifacts/a.patch, kb/artifacts/b.patch"]);
+	assert.equal(f.out.at(-1), nudge(`kb/${over}.md`), "the nudge stays last");
+	assert.ok(f.out.some((line) => line.startsWith("dive  ")), "after the paths");
+});

@@ -711,3 +711,32 @@ export function pushRecord(hero: Hero, record: () => void): void {
 		}
 	}
 }
+
+/** The heading of the section legacy-patches appends to a dive it migrated, as `withSection` heads one: an ISO timestamp, then `migrated`. */
+export const MIGRATED = /^## \d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z migrated[ \t]*$/m;
+
+/**
+ * What jump warns of: for each `patch` link the dive still has, the patch files of its chain, which legacy-patches removes
+ * only once pushed, so what is left is work to patch by hand. A chain that breaks at a missing memo says so after those found.
+ */
+export function patchWarnings(hero: Hero, dive: Doc): string[] {
+	return linkedIds(dive)
+		.filter((link) => link.rel === "patch")
+		.map(({ id: head }) => {
+			const files: string[] = [];
+			let lost: string | undefined;
+			const seen = new Set<string>();
+			for (let id: string | undefined = head; id && !seen.has(id); ) {
+				seen.add(id);
+				const memo = heroDoc(hero, id);
+				const file = (memo?.fm.meta as { patch?: unknown } | undefined)?.patch;
+				if (!memo || typeof file !== "string") {
+					lost = id;
+					break;
+				}
+				files.push(file.replace(/\\/g, "/"));
+				id = linkedIds(memo).find((link) => link.rel === "next")?.id;
+			}
+			return `warning: work legacy-patches passed over is left in ${files.length > 0 ? files.join(", ") : "no patch file"}${lost ? `, and its chain breaks at memo ${lost}, so its later patches are not known` : ""}; apply it by hand, then remove the dive's patch links`;
+		});
+}

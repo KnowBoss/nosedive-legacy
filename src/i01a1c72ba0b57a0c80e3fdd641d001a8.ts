@@ -33,9 +33,14 @@ export function i01a1c72ba0b57a0c80e3fdd641d001a8(hero: Hero, doc: Doc, change: 
 	const meta = (doc.yaml.toJS() as { meta?: Record<string, unknown> }).meta;
 	if (meta && Object.keys(meta).length === 0) doc.yaml.delete("meta");
 	if (change.scopes) doc.yaml.set("scopes", change.scopes);
-	const body = `${doc.body.replace(/\n*$/, "\n")}\n## ${new Date().toISOString()} ${change.label}\n\n${change.lines.join("\n")}\n`;
+	const body = withSection(doc.body, change.label, change.lines);
 	writeKbDoc(doc.path, doc.yaml, body);
 	doc.body = body;
 	const linkers = change.state ? moveLinks(diveLinks(hero).get(String(doc.fm.id)) ?? { state: change.state, by: [] }, String(doc.fm.id), change.state) : [];
 	commitFiles(hero.dir, [...new Set([doc.path, ...linkers.map((linker) => linker.path), ...(change.also ?? [])])], `${change.action}(${String(doc.fm.name)}): ${change.summary}`, version);
+}
+
+/** A body with a `## <iso time> <label>` section appended, as every record of a dive heads its own. */
+export function withSection(body: string, label: string, lines: string[]): string {
+	return `${body.replace(/\n*$/, "\n")}\n## ${new Date().toISOString()} ${label}\n\n${lines.join("\n")}\n`;
 }

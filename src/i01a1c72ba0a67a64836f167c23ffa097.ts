@@ -319,11 +319,19 @@ export function stamp(dir: string, range: string[], trailers: string[]): number 
 /**
  * The ignored files a pack keeps: all but those an install or a build remakes, and none under a workspace. Only regular
  * files: git lists a symlink as a file, but a zip holds bytes, and one to a directory cannot be read as a file at all.
+ * None under a link either: on Windows git lists the files inside a junction as if they were the checkout's own.
  */
 function keepable(hero: Hero, dir: string): string[] {
 	const isSpared = spared(hero, dir);
+	const linked = new Map<string, boolean>();
+	const isLink = (path: string) => {
+		if (!linked.has(path)) linked.set(path, lstatSync(join(dir, path)).isSymbolicLink());
+		return linked.get(path)!;
+	};
 	const isFile = (file: string) => {
 		try {
+			const parts = file.split("/");
+			if (parts.slice(0, -1).some((_, i) => isLink(parts.slice(0, i + 1).join("/")))) return false;
 			return lstatSync(join(dir, file)).isFile();
 		} catch {
 			return false;

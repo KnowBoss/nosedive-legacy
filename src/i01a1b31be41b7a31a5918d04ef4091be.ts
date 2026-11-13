@@ -87,7 +87,7 @@ function already(who: string, missing: Patch[]): string {
 	return missing.length === 0 ? `- ${who}: already on origin` : `- ${who}: already on origin, not holding ${missing.map((patch) => patch.rel).join(", ")}: kept`;
 }
 
-const patchCount =(n: number) => `${n} patch${n === 1 ? "" : "es"}`;
+const patchCount = (n: number) => `${n} patch${n === 1 ? "" : "es"}`;
 
 /** Applies the patches onto `base` in a scratch worktree of `repo` and pushes the result to `ref`; says why when it cannot apply, else what it pushed. */
 function build(repo: string, base: string, patches: Patch[], wip: string, ref: string, name: string, identity: Record<string, string>): { sha: string } | { why: string } {

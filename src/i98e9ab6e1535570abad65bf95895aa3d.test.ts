@@ -47,3 +47,15 @@ test("a dive held or packed is not dropped; one over by its link, one never jump
 		await before(over.ctx({ before: state({ feat: "a", diver: null, packer: "diver@example.com" }) }));
 	}
 });
+
+test("any edit of a held dive is refused, saying to record a turn or pack it; a packed, over or unjumped one is edited", async () => {
+	const held = dive("shape-before-held-edit");
+	const heldMeta = { feat: "a", diver: "diver@example.com#0123456789ab" };
+	await assert.rejects(before(held.ctx({ before: state(heldMeta), after: state(heldMeta) })), /dive ideas\.briefed is held by diver@example\.com, so its doc changes only through the loop: record a turn with `pass --turn` instead, or pack it first/);
+	const jumped = dive("shape-before-held-link", "jumped");
+	await assert.rejects(before(jumped.ctx({ before: state({ feat: "a" }), after: state({ feat: "a" }) })), /dive ideas\.briefed is held, so its doc changes only through the loop/, "a jumped link holds it, whatever its meta");
+	for (const [rel, meta] of [["packed", { feat: "a", diver: null, packer: "diver@example.com" }], ["landed", { feat: "a", diver: "diver@example.com#0123456789ab" }], ["bailed", { feat: "a", diver: "diver@example.com#0123456789ab" }], ["planned", { feat: "a" }]] as const) {
+		const open = dive(`shape-before-edit-${rel}`, rel);
+		await before(open.ctx({ before: state(meta), after: state(meta) }));
+	}
+});

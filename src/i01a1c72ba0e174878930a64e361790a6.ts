@@ -1,8 +1,9 @@
+import { resolve } from "node:path";
 import type { GateCtx } from "nosedive-core";
-import { i01a1c72ba0a67a64836f167c23ffa097 as diveOnDeck } from "./i01a1c72ba0a67a64836f167c23ffa097.ts";
+import { i01a1c72ba0a67a64836f167c23ffa097 as diveOnDeck, putTurnOnHome, type TurnOutcome } from "./i01a1c72ba0a67a64836f167c23ffa097.ts";
 
 export async function i01a1c72ba0e174878930a64e361790a6(ctx: GateCtx): Promise<void> {
-	diveOnDeck(ctx.bridge, ctx, ctx.doc.id);
+	const { home } = diveOnDeck(ctx.bridge, ctx, ctx.doc.id);
 	const summary = typeof ctx.args.summary === "string" ? ctx.args.summary.trimEnd() : "";
 	const next = typeof ctx.args.next === "string" ? ctx.args.next : "";
 	const label = typeof ctx.args.label === "string" ? ctx.args.label : "";
@@ -13,4 +14,22 @@ export async function i01a1c72ba0e174878930a64e361790a6(ctx: GateCtx): Promise<v
 	const heading = `${new Date().toISOString()}${label ? ` ${label}` : ""}`;
 	ctx.doc.body = `${ctx.doc.body.replace(/\n*$/, "\n")}\n## ${heading}\n\n${lines.join("\n")}\n`;
 	ctx.edit.change(ctx.doc);
+
+	// Once pass has committed, its commit goes on the home too. The turn is recorded either way, so what fails to reach the home warns, and exits 0.
+	if (!ctx.committed) {
+		ctx.err(`warning: this nosedive cannot put the turn on ${home}, so it is on the dive branch only: update nosedive core`);
+		return;
+	}
+	ctx.committed((commits) => {
+		const commit = commits.find((each) => resolve(each.repoDir).toLowerCase() === resolve(ctx.bridge.dir).toLowerCase());
+		let outcome: TurnOutcome;
+		try {
+			outcome = commit ? putTurnOnHome(ctx.bridge, home, commit.sha) : { kind: "dive-branch-only" as const, why: "pass made no commit in the hero" };
+		} catch (error) {
+			outcome = { kind: "dive-branch-only" as const, why: error instanceof Error ? error.message : String(error) };
+		}
+		if (outcome.kind === "pushed") ctx.out(`turn: ${outcome.sha} on ${home}, pushed to ${outcome.to}`);
+		else if (outcome.kind === "unpushed") ctx.err(`warning: the turn is on ${home} but not pushed to ${outcome.to}: ${outcome.why}; the next turn, pack or land pushes it`);
+		else ctx.err(`warning: the turn is on the dive branch only: ${outcome.why}; land carries it`);
+	});
 }

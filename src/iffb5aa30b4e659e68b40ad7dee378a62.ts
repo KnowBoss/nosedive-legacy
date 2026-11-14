@@ -31,7 +31,7 @@ export async function iffb5aa30b4e659e68b40ad7dee378a62(args: Args, ctx: Ctx): P
 }
 
 /** The feat and every doc reached from it through links whose rel's role is .feat, either way, never into a dive. */
-function reachedFeats(docs: Map<string, Doc>, featId: string | undefined): string[] {
+export function reachedFeats(docs: Map<string, Doc>, featId: string | undefined): string[] {
 	if (!featId || !docs.has(featId)) return [];
 	const edges = new Map<string, Set<string>>();
 	const edge = (from: string, to: string) => edges.set(from, (edges.get(from) ?? new Set()).add(to));

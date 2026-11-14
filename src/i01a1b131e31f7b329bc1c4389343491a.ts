@@ -92,21 +92,28 @@ rearm();
 `;
 
 /** Runs one gate's script in its own process with its ctx, answering its resolves; returns its exit status. */
-function runGate(hero: Bridge, script: string, context: Record<string, unknown>, runner: string): Promise<number> {
+function runGate(hero: Bridge, script: string, context: Record<string, unknown>, runner: string, capture?: string[]): Promise<number> {
 	return new Promise((done, fail) => {
 		const child = spawn(process.execPath, [runner], {
 			cwd: hero.dir,
-			stdio: ["inherit", "inherit", "inherit", "ipc"],
+			stdio: ["inherit", "inherit", capture ? "pipe" : "inherit", "ipc"],
 			env: { ...process.env, NOSEDIVE_GATE_MODULE: script, NOSEDIVE_GATE_CONTEXT: JSON.stringify(context) },
 		});
 		child.on("message", (message: { quid: string }) => {
 			const doc = locateKbDoc(hero, message.quid);
 			child.send({ quid: message.quid, doc: doc ? { id: String(doc.fm.id), fm: doc.fm, body: doc.body, path: relative(hero.dir, doc.path).replace(/\\/g, "/") } : null });
 		});
+		child.stderr?.on("data", (chunk: Buffer) => {
+			capture?.push(chunk.toString());
+			process.stderr.write(chunk);
+		});
 		child.on("error", fail);
 		child.on("exit", (code) => done(code ?? 1));
 	});
 }
+
+/** How one gate fared: its stderr is kept only when it ran with `live` repos. */
+export type GateResult = { gate: Doc; name: string; script: string; flaky: boolean; ok: boolean; ms: number; stderr: string };
 
 /**
  * Runs the selected gates in order, each with its scopes checked out and legacy's ctx, streaming their output; every gate
@@ -114,11 +121,25 @@ function runGate(hero: Bridge, script: string, context: Record<string, unknown>,
  */
 export async function i01a1b131e31f7b329bc1c4389343491a(hero: Bridge, selected: Selected[], dive: HeldDive | undefined, ctx: Ctx): Promise<void> {
 	if (selected.length === 0) throw new Error("no gates were selected, and running none would pass having checked nothing");
+	const results = await executeGates(hero, selected, dive, ctx);
+	const failed = results.filter((result) => !result.ok);
+	const blocking = failed.filter((gate) => !gate.flaky);
+	const warned = failed.filter((gate) => gate.flaky);
+	ctx.out(`${selected.length - failed.length} of ${selected.length} gates passed`);
+	if (warned.length) ctx.out(`failed, flaky: ${warned.map((gate) => gate.name).join(", ")}`);
+	if (blocking.length) throw new Error(`${blocking.length} gate${blocking.length === 1 ? "" : "s"} failed: ${blocking.map((gate) => gate.name).join(", ")}`);
+}
+
+/**
+ * Runs each gate whatever came before and says how each fared. With `live`, every gate sees those repos, the dive's own
+ * checkouts as they stand, rather than checking its scopes out at their refs, and its stderr is kept.
+ */
+export async function executeGates(hero: Bridge, selected: Selected[], dive: HeldDive | undefined, ctx: Ctx, live?: Record<string, { id: string; root: string }>): Promise<GateResult[]> {
+	const results: GateResult[] = [];
 	const dir = mkdtempSync(join(tmpdir(), "nosedive-gate-"));
 	const runner = join(dir, "gate-runner.mjs");
 	writeFileSync(runner, RUNNER);
 	const claims = new Map<string, { ref: string | undefined; by: string; root: string }>();
-	const failed: { name: string; flaky: boolean }[] = [];
 	try {
 		for (const { gate, by, flaky } of selected) {
 			const name = String(gate.fm.name);
@@ -127,14 +148,15 @@ export async function i01a1b131e31f7b329bc1c4389343491a(hero: Bridge, selected: 
 			const script = scriptOf(gate)!;
 			const scriptPath = isAbsolute(script) ? script : join(hero.dir, script);
 			if (!existsSync(scriptPath)) {
-				ctx.err(`nosedive: ${name}'s meta.test-script ${script} is no file`);
-				failed.push({ name, flaky });
+				const stderr = `${name}'s meta.test-script ${script} is no file`;
+				ctx.err(`nosedive: ${stderr}`);
+				results.push({ gate, name, script, flaky, ok: false, ms: 0, stderr });
 				continue;
 			}
-			if (git(hero.dir, "status", "--porcelain", "--", gate.path, scriptPath).text) ctx.err(`nosedive: ${name}'s doc or script has uncommitted changes, which land would not accept yet`);
+			if (!live && git(hero.dir, "status", "--porcelain", "--", gate.path, scriptPath).text) ctx.err(`nosedive: ${name}'s doc or script has uncommitted changes, which land would not accept yet`);
 
-			const scopes = "scopes" in gate.fm ? scopesOf(hero, gate) : by ? scopesOf(hero, by) : [];
-			const repos: Record<string, { id: string; root: string }> = {};
+			const scopes = live ? [] : "scopes" in gate.fm ? scopesOf(hero, gate) : by ? scopesOf(hero, by) : [];
+			const repos: Record<string, { id: string; root: string }> = { ...live };
 			for (const scope of scopes) {
 				const repo: RepoDoc = findRepo(hero, scope.repoId);
 				const claim = claims.get(scope.repoId);
@@ -147,7 +169,7 @@ export async function i01a1b131e31f7b329bc1c4389343491a(hero: Bridge, selected: 
 				}
 				repos[String(repo.fm.name)] = { id: scope.repoId, root: claims.get(scope.repoId)!.root };
 			}
-			if (scopes.length === 0) ctx.err(`nosedive: ${name} runs with no repos`);
+			if (!live && scopes.length === 0) ctx.err(`nosedive: ${name} runs with no repos`);
 
 			const context = {
 				bridgeRoot: hero.dir,
@@ -157,19 +179,15 @@ export async function i01a1b131e31f7b329bc1c4389343491a(hero: Bridge, selected: 
 				introducedById: by ? String(by.fm.id) : String(gate.fm.id),
 				repos,
 			};
-			const status = await runGate(hero, scriptPath, context, runner);
+			const captured: string[] | undefined = live ? [] : undefined;
+			const started = Date.now();
+			const status = await runGate(hero, scriptPath, context, runner, captured);
+			results.push({ gate, name, script, flaky, ok: status === 0, ms: Date.now() - started, stderr: (captured ?? []).join("") });
 			if (status === 0) ctx.out(`  passed`);
-			else {
-				ctx.out(flaky ? `  failed (flaky)` : `  failed`);
-				failed.push({ name, flaky });
-			}
+			else ctx.out(flaky ? `  failed (flaky)` : `  failed`);
 		}
 	} finally {
 		rmSync(dir, { recursive: true, force: true });
 	}
-	const blocking = failed.filter((gate) => !gate.flaky);
-	const warned = failed.filter((gate) => gate.flaky);
-	ctx.out(`${selected.length - failed.length} of ${selected.length} gates passed`);
-	if (warned.length) ctx.out(`failed, flaky: ${warned.map((gate) => gate.name).join(", ")}`);
-	if (blocking.length) throw new Error(`${blocking.length} gate${blocking.length === 1 ? "" : "s"} failed: ${blocking.map((gate) => gate.name).join(", ")}`);
+	return results;
 }

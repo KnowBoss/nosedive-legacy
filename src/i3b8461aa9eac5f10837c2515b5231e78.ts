@@ -1,9 +1,12 @@
-import { relative } from "node:path";
-import type { Args, Ctx } from "nosedive-core";
+import { existsSync } from "node:fs";
+import { dirname, isAbsolute, join, relative } from "node:path";
+import type { Args, Bridge, Ctx } from "nosedive-core";
 import { i01a1335485c67c95b7efdf2f0e03cfd6 as findBridge } from "nosedive-core";
 import { coAuthor } from "nosedive-core";
-import { i01a1c72ba0a67a64836f167c23ffa097 as diveOnDeck, deleteRefs, diveRefs, durableFeat, emailOf, fetchUpstream, heroDoc, homeUpstream, packIgnored, pushRecord, readOnlyRefusals, scopesWith, stamp, syncHome } from "./i01a1c72ba0a67a64836f167c23ffa097.ts";
-import { i01a1c72ba0b57a0c80e3fdd641d001a8 as recordDive } from "./i01a1c72ba0b57a0c80e3fdd641d001a8.ts";
+import { executeGates, heroDocs, linksOf, scriptOf, type GateResult, type Selected } from "./i01a1b131e31f7b329bc1c4389343491a.ts";
+import { reachedFeats } from "./iffb5aa30b4e659e68b40ad7dee378a62.ts";
+import { i01a1c72ba0a67a64836f167c23ffa097 as diveOnDeck, type Dive, deleteRefs, diveRefs, durableFeat, emailOf, fetchUpstream, heroDoc, homeUpstream, packIgnored, pushRecord, readOnlyRefusals, scopesWith, stamp, syncHome } from "./i01a1c72ba0a67a64836f167c23ffa097.ts";
+import { i01a1c72ba0b57a0c80e3fdd641d001a8 as recordDive, commitSection } from "./i01a1c72ba0b57a0c80e3fdd641d001a8.ts";
 import { i01a1c72ba0c37d27a058e908481307c3 as runGit } from "./i01a1c72ba0c37d27a058e908481307c3.ts";
 
 export async function i3b8461aa9eac5f10837c2515b5231e78(args: Args, ctx: Ctx): Promise<void> {
@@ -37,7 +40,17 @@ export async function i3b8461aa9eac5f10837c2515b5231e78(args: Args, ctx: Ctx): P
 			refused.push(`${scope.branch} in ${scope.name} has moved to ${tip.slice(0, 7)}, which this dive's work does not contain: pack, then jump ${id}, which rebases the work onto it`);
 		}
 	}
+	const gates = selectGates(hero, dive, refused);
 	if (refused.length > 0) throw new Error(`nothing was landed:\n  ${refused.join("\n  ")}`);
+
+	// Gates see the checkouts as they are about to be pushed, and one blocking failure pushes nothing.
+	if (gates.length > 0) {
+		const live = Object.fromEntries(dive.scopes.filter((scope) => scope.ours).map((scope) => [scope.name, { id: scope.repoId, root: relative(hero.dir, scope.dir).replace(/\\/g, "/") }]));
+		const results = await executeGates(hero, gates, { id, doc: dive.doc, featId: dive.featId, scopes: [] }, ctx, live);
+		recordReport(hero, id, results, ctx.capes[0]!.version);
+		const blocking = results.filter((result) => !result.ok && !result.flaky);
+		if (blocking.length > 0) throw new Error(`nothing was landed: ${blocking.length} gate${blocking.length === 1 ? "" : "s"} failed: ${blocking.map((gate) => gate.name).join(", ")}; the report is on the dive`);
+	}
 
 	const trailers = [`Nosedive-Dive: ${id}`, `Nosedive-Feat: ${durableFeat(hero, dive, ctx.capes)}`, coAuthor(ctx.capes[0]!.version)];
 	const lines: string[] = [];
@@ -87,4 +100,51 @@ export async function i3b8461aa9eac5f10837c2515b5231e78(args: Args, ctx: Ctx): P
 		runGit(scope.dir, "branch", "-q", "-D", dive.branch);
 	}
 	ctx.out(`landed ${String(dive.doc.fm.name)}${lines.length > 0 ? `\n${lines.join("\n")}` : ""}`);
+}
+
+/**
+ * The land.gate links on the dive, its scoped repos and the feats its feat reaches along .feat edges, tallest gate-height first,
+ * ties in discovery order; a gate reached twice keeps its first link's attributes. What would stop one running is added to `refused`.
+ */
+function selectGates(hero: Bridge, dive: Dive, refused: string[]): Selected[] {
+	const docs = heroDocs(hero);
+	const declarers = [dive.doc, ...dive.scopes.flatMap((scope) => docs.get(scope.repoId) ?? []), ...(dive.feat ? reachedFeats(docs, dive.featId).flatMap((id) => docs.get(id) ?? []) : [])];
+	const found: { selected: Selected; height: number }[] = [];
+	const seen = new Set<string>();
+	for (const by of declarers) {
+		for (const link of linksOf(by)) {
+			if (link.rel !== "land.gate" || seen.has(link.id)) continue;
+			seen.add(link.id);
+			const gate = docs.get(link.id);
+			if (!gate) {
+				refused.push(`${String(by.fm.name)} declares gate ${link.id}, which is no doc`);
+				continue;
+			}
+			const name = String(gate.fm.name);
+			const script = scriptOf(gate);
+			if (!script) {
+				refused.push(`gate ${name} has no meta.test-script: add one naming a bridge-relative file`);
+				continue;
+			}
+			const scriptPath = isAbsolute(script) ? script : join(hero.dir, script);
+			if (!existsSync(scriptPath)) refused.push(`gate ${name}'s meta.test-script ${script} is no file`);
+			else if (runGit(hero.dir, "status", "--porcelain", "--", gate.path, scriptPath).text) refused.push(`gate ${name}'s doc or script has uncommitted changes: commit them first`);
+			const height = Number(link.attrs["gate-height"] ?? 0);
+			found.push({ selected: { gate, by, flaky: link.attrs["test-is-flaky"] === true }, height: Number.isFinite(height) ? height : 0 });
+		}
+	}
+	return found.sort((a, b) => b.height - a.height).map((each) => each.selected);
+}
+
+/** Appends `## Land report <timestamp>` to the dive and commits it on the dive's branch, which the land or the next jump carries. */
+function recordReport(hero: Bridge, id: string, results: GateResult[], version: string): void {
+	const doc = heroDoc(hero, id)!;
+	const lines = results.map((result) => {
+		const link = `[${result.name}](${relative(dirname(doc.path), result.gate.path).replace(/\\/g, "/")})`;
+		if (result.ok) return `- ${link}: passed in ${result.ms}ms`;
+		const stderr = result.stderr.trimEnd().split("\n").map((line) => `  ${line}`.trimEnd());
+		return [`- ${link}: failed${result.flaky ? " (flaky, a warning)" : ""} in ${result.ms}ms`, "", `  script: ${result.script}`, "", "  ```", ...stderr, "  ```"].join("\n");
+	});
+	const failed = results.filter((result) => !result.ok).length;
+	commitSection(hero, doc, `## Land report ${new Date().toISOString()}`, lines, { action: "land", summary: `ran ${results.length} gate${results.length === 1 ? "" : "s"}, ${failed} failed` }, version);
 }

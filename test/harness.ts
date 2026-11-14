@@ -14,7 +14,9 @@ after(() => rmSync(root, { recursive: true, force: true }));
 // Core keeps repo caches in the user's dir; a test's go in its own.
 process.env.NOSEDIVE_USER_DIR = mkdtempSync(join(root, "user-"));
 
-export const WORK_ID = "01a15bb1-da9e-7d2d-aa82-5ee97257adc6";
+export { mintUuid };
+
+export const WORK_ID ="01a15bb1-da9e-7d2d-aa82-5ee97257adc6";
 
 export function tempDir(label: string): string {
 	return mkdtempSync(join(root, `${label}-`));

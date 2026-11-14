@@ -40,6 +40,14 @@ export function i01a1c72ba0b57a0c80e3fdd641d001a8(hero: Hero, doc: Doc, change: 
 	commitFiles(hero.dir, [...new Set([doc.path, ...linkers.map((linker) => linker.path), ...(change.also ?? [])])], `${change.action}(${String(doc.fm.name)}): ${change.summary}`, version);
 }
 
+/** Appends a section under `heading` to the dive's doc and commits it, as `<action>(<dive name>): <summary>`, with nothing else changed. */
+export function commitSection(hero: Hero, doc: Doc, heading: string, lines: string[], message: { action: string; summary: string }, version: string): void {
+	const body = `${doc.body.replace(/\n*$/, "\n")}\n${heading}\n\n${lines.join("\n")}\n`;
+	writeKbDoc(doc.path, doc.yaml, body);
+	doc.body = body;
+	commitFiles(hero.dir, [doc.path], `${message.action}(${String(doc.fm.name)}): ${message.summary}`, version);
+}
+
 /** A body with a `## <iso time> <label>` section appended, as every record of a dive heads its own. */
 export function withSection(body: string, label: string, lines: string[]): string {
 	return `${body.replace(/\n*$/, "\n")}\n## ${new Date().toISOString()} ${label}\n\n${lines.join("\n")}\n`;

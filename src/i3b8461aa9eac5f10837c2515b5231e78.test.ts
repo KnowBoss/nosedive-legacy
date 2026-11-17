@@ -104,7 +104,7 @@ const commitAll = (f: Loop, message: string) => {
 };
 const order = (f: Loop) => (existsSync(join(f.hero, "..", "order.log")) ? readFileSync(join(f.hero, "..", "order.log"), "utf8").trim().split("\n") : []);
 
-test("runs the land.gates of the dive, its repos, its feat and the feats it reaches, tallest first, before pushing, and reports each above the outcome", async () => {
+test("runs the land.gates of the dive, its repos, its feat and the feat's ancestors, tallest first, before pushing, and reports each above the outcome", async () => {
 	const f = fixture("land-gates");
 	await jump({ ref: f.featId }, f.ctx);
 	const id = f.onDeck();
@@ -120,10 +120,24 @@ test("runs the land.gates of the dive, its repos, its feat and the feats it reac
 	declare(join(f.hero, "kb", `${f.featId}.md`), onFeat, "rel: land.gate, gate-height: 3");
 	// The root is reached from the feat along its work.feat link.
 	declare(join(f.hero, "kb", `${f.heroId}.md`), onRoot, "rel: land.gate, gate-height: 2, test-is-flaky: true");
+	// A sibling feat under the same root guards its own work, not this dive's: its failing gate never runs.
+	const [sibling, onSibling] = [gate(f, "sibling", "", { script: false }), gate(f, "on-sibling", "return false;")];
+	declare(join(f.hero, "kb", `${f.heroId}.md`), sibling, "rel: work.feat");
+	declare(join(f.hero, "kb", `${sibling}.md`), onSibling, "rel: land.gate, gate-height: 50");
+	// parent.feat climbs too: the feat names a goal above it, whose gate runs; a second child of that goal and a child of
+	// the feat, each naming its parent by parent.feat, guard their own work, so their failing gates never run.
+	const kb = (id: string) => join(f.hero, "kb", `${id}.md`);
+	const [goal, onGoal, peer, onPeer, child, onChild] = [gate(f, "goal", "", { script: false }), gate(f, "on-goal"), gate(f, "peer", "", { script: false }), gate(f, "on-peer", "return false;"), gate(f, "child", "", { script: false }), gate(f, "on-child", "return false;")];
+	declare(kb(f.featId), goal, "rel: parent.feat");
+	declare(kb(peer), goal, "rel: parent.feat");
+	declare(kb(child), f.featId, "rel: parent.feat");
+	declare(kb(goal), onGoal, "rel: land.gate, gate-height: 4");
+	declare(kb(peer), onPeer, "rel: land.gate, gate-height: 50");
+	declare(kb(child), onChild, "rel: land.gate, gate-height: 50");
 	commitAll(f, "gates");
 
 	await land({}, f.ctx);
-	assert.deepEqual(order(f), ["on-dive", "on-repo", "on-feat", "on-root", "shared", "plain"], "tallest first, ties as found, a gate reached twice at its first link's height");
+	assert.deepEqual(order(f), ["on-dive", "on-repo", "on-goal", "on-feat", "on-root", "shared", "plain"], "tallest first, ties as found, a gate reached twice at its first link's height");
 	assert.equal(f.remoteRef("refs/heads/work/ideas"), git(f.checkout, "rev-parse", "HEAD"), "a flaky failure does not block");
 	const doc = f.doc(id);
 	assert.match(doc, new RegExp(`\\n## Land report \\d{4}-\\d\\d-\\d\\dT[\\d:.]+Z\\n\\n- \\[on-dive\\]\\(${onDive}\\.md\\): passed in \\d+ms\\n- \\[on-repo\\]`));

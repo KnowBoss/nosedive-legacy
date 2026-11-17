@@ -4,7 +4,7 @@ import { i01a18e2a3b4b798d98068d4778a158e6 as docKind } from "nosedive-core";
 import { i01a1b131e1947fa5b316b390a3be2415 as heldDive } from "./i01a1b131e1947fa5b316b390a3be2415.ts";
 import { heroDocs, linksOf, scriptOf, i01a1b131e31f7b329bc1c4389343491a as runGates, type Doc, type Selected } from "./i01a1b131e31f7b329bc1c4389343491a.ts";
 
-/** The held dive's test.gate links; with `full`, those of its feat, its scoped repos and every feat its feat reaches by .feat links. */
+/** The held dive's test.gate links; with `full`, those of its feat, its scoped repos and the feat's ancestors along .feat links. */
 export async function iffb5aa30b4e659e68b40ad7dee378a62(args: Args, ctx: Ctx): Promise<void> {
 	const hero = findBridge(ctx.cwd);
 	if (!hero?.workspace) throw new Error("test works in a hero repo, and this is not one");
@@ -30,16 +30,26 @@ export async function iffb5aa30b4e659e68b40ad7dee378a62(args: Args, ctx: Ctx): P
 	await runGates(hero, selected, dive, ctx);
 }
 
-/** The feat and every doc reached from it through links whose rel's role is .feat, either way, never into a dive. */
+/**
+ * The feat and its ancestors: every doc above it along links whose rel's role is .feat, never into a dive. A doc is above
+ * the one it links by any .feat rel but parent.feat, and the doc a parent.feat link names is above the one holding it, so a
+ * gate guards the work under the doc that declares it and never a sibling's or a cousin's.
+ */
 export function reachedFeats(docs: Map<string, Doc>, featId: string | undefined): string[] {
 	if (!featId || !docs.has(featId)) return [];
-	const edges = new Map<string, Set<string>>();
-	const edge = (from: string, to: string) => edges.set(from, (edges.get(from) ?? new Set()).add(to));
-	for (const [id, doc] of docs) for (const link of linksOf(doc)) if (link.rel.endsWith(".feat")) (edge(id, link.id), edge(link.id, id));
+	const parents = new Map<string, Set<string>>();
+	const above = (child: string, parent: string) => parents.set(child, (parents.get(child) ?? new Set()).add(parent));
+	for (const [id, doc] of docs) {
+		for (const link of linksOf(doc)) {
+			if (!link.rel.endsWith(".feat")) continue;
+			if (link.rel === "parent.feat") above(id, link.id);
+			else above(link.id, id);
+		}
+	}
 	const reached = new Set([featId]);
 	const queue = [featId];
 	while (queue.length) {
-		for (const next of edges.get(queue.shift()!) ?? []) {
+		for (const next of parents.get(queue.shift()!) ?? []) {
 			const doc = docs.get(next);
 			if (reached.has(next) || !doc || docKind(doc).name === "dive") continue;
 			reached.add(next);

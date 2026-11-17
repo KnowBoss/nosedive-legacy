@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
+import { writeFileSync } from "node:fs";
 import { test } from "node:test";
-import { fixture, git } from "../test/harness.ts";
+import { fixture, git, mintUuid } from "../test/harness.ts";
 import { iffb5aa30b4e659e68b40ad7dee378a62 as testHeld } from "./iffb5aa30b4e659e68b40ad7dee378a62.ts";
 
 test("with no dive held, test is refused naming jump and the named form", async () => {
@@ -36,6 +37,30 @@ test("--full adds the feat's, its scoped repos' and its ancestors' gates, never 
 	await testHeld({ full: true }, f.ctx);
 	// The root links both feats as .feat: it is the feat's ancestor, and the other feat only its sibling.
 	assert.deepEqual(ran(f.out).sort(), ["dive-gate", "feat-gate", "root-gate"].sort());
+});
+
+test("--full climbs parent.feat links: the parent's gates run, a sibling's and a child's under it never do", async () => {
+	const f = fixture("full-parent");
+	// Feats linked as real heroes link them: each child names its parent by parent.feat.
+	const memo = (name: string, parent: string) => {
+		const id = mintUuid();
+		writeFileSync(f.path(id), `---\nkind: memo\nid: ${id}\nname: ${name}\ngist: "${name}"\n---\n\n# ${name}\n`);
+		f.link(id, parent, "rel: parent.feat");
+		f.commit(`memo ${name}`);
+		return id;
+	};
+	const goal = memo("goal", f.heroId);
+	f.link(f.featId, goal, "rel: parent.feat");
+	f.commit("feat under goal");
+	const sibling = memo("sibling", goal);
+	const child = memo("child", f.featId);
+	f.gate("goal-gate", "return true;", { on: goal });
+	f.gate("sibling-gate", "return false;", { on: sibling });
+	f.gate("child-gate", "return false;", { on: child });
+	f.dive(f.featId);
+	await testHeld({ full: true }, f.ctx);
+	// A gate guards the work under the doc declaring it: work on the feat is under goal, not under its sibling or child.
+	assert.deepEqual(ran(f.out).sort(), ["goal-gate"].sort());
 });
 
 test("--full takes the gates of the repos the dive scopes", async () => {

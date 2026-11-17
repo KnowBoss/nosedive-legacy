@@ -19,7 +19,7 @@ test("test runs the held dive's own test.gate links, at the dive's scope refs", 
 	assert.equal(git(f.checkout, "rev-parse", "HEAD"), f.first);
 });
 
-test("--full adds the feat's, its scoped repos' and its connected feats' gates, never another dive's", async () => {
+test("--full adds the feat's, its scoped repos' and its ancestors' gates, never a sibling feat's or another dive's", async () => {
 	const f = fixture("full");
 	// Another dive on the same feat: its gates are its own work.
 	const other = f.dive(f.featId, undefined, false);
@@ -28,13 +28,14 @@ test("--full adds the feat's, its scoped repos' and its connected feats' gates, 
 	f.gate("dive-gate", "return true;", { on: dive });
 	f.gate("feat-gate", "return true;", { on: f.featId });
 	f.gate("repo-gate", "return true;", { on: f.repoId, scopes: "  []" });
-	f.gate("sibling-gate", "return true;", { on: f.otherFeatId });
+	f.gate("sibling-gate", "return false;", { on: f.otherFeatId });
+	f.gate("root-gate", "return true;", { on: f.heroId });
 	await testHeld({}, f.ctx);
 	assert.deepEqual(ran(f.out), ["dive-gate"]);
 	f.out.length = 0;
 	await testHeld({ full: true }, f.ctx);
-	// The two feats connect through the root, which links both as .feat.
-	assert.deepEqual(ran(f.out).sort(), ["dive-gate", "feat-gate", "sibling-gate"].sort());
+	// The root links both feats as .feat: it is the feat's ancestor, and the other feat only its sibling.
+	assert.deepEqual(ran(f.out).sort(), ["dive-gate", "feat-gate", "root-gate"].sort());
 });
 
 test("--full takes the gates of the repos the dive scopes", async () => {

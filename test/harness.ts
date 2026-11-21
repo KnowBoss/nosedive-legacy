@@ -227,15 +227,17 @@ export function loopFixture(label: string, options: { readOnly?: boolean; roots?
 		 * Plans a dive on the feat as `crud nosedive-legacy:dive <gist> --meta:feat <feat> --section:Brief -` would, dive-shape scoping, naming
 		 * and linking it `planned.dive`: committed on the hero's main and pushed. Returns its id.
 		 */
-		plan(gist = "Do the next part"): string {
+		plan(gist = "Do the next part", unpushed = false): string {
 			const id = mintUuid();
 			const repoScope = options.readOnly ? `  - ${repoId}: {}\n` : `  - ${repoId}:\n      work-branch: work/ideas\n`;
 			const scopes = `scopes:\n  - 01a1b128-2c08-790f-80f4-e2c40a98bfcc:\n      canonical: true\n${repoScope}`;
 			writeFileSync(join(hero, docs, `${id}.md`), `---\nkind: dive\nid: ${id}\nname: ideas.${id.slice(-6)}\ngist: "${gist}"\n${scopes}meta:\n  feat: ${featId}\n---\n\n# ${gist}\n\n## Brief\n\n${gist}.\n`);
 			linkFrom(featId, id, "planned.dive");
 			git(hero, "add", "-A");
-			git(hero, "commit", "-q", "-m", "plan a dive");
-			git(hero, "push", "-q", "origin", "HEAD:main");
+			// As crud commits it when unpushed: on this branch only, nosedive the committer.
+			const env = unpushed ? { ...process.env, GIT_COMMITTER_NAME: "nosedive", GIT_COMMITTER_EMAIL: "noreply@nosedive.dev" } : process.env;
+			spawnSync("git", ["commit", "-q", "-m", "plan a dive"], { cwd: hero, env });
+			if (!unpushed) git(hero, "push", "-q", "origin", "HEAD:main");
 			return id;
 		},
 		/**

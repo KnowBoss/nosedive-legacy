@@ -25,7 +25,7 @@ export async function i3b8461aa9eac5f10837c2515b5231e78(args: Args, ctx: Ctx): P
 	const up = homeUpstream(hero, home);
 	fetchUpstream(hero, up);
 	try {
-		syncHome(hero, home, up, true);
+		syncHome(hero, home, up);
 	} catch (error) {
 		refused.push((error as Error).message);
 	}

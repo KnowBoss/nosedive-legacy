@@ -11,7 +11,7 @@ import { i01a147171f057d019118aaa1f269f5fd as findKind } from "nosedive-core";
 import { i01a18e2a3b4b798d98068d4778a158e6 as docKind } from "nosedive-core";
 import { pinOf } from "nosedive-core";
 import { i01a1335483aa776cb84df698b04adc06 as writeKbDoc } from "nosedive-core";
-import { LEGACY_ID, isDive as isLegacyDive, describeDive, diveBranch, diveBranches, diveLinks, emailOf, featIdOf, fetchAll, fetchUpstream, heroBranch, heroDoc, homeOf, homeUpstream, isDiveRef, isOver, keyOf, metaOf, openDives, orphan, parseDiveBranch, patchWarnings, pushRecord, readScopes, repoDoc, scopesWith, stateLinksOf, swapIgnored, syncHome, tokenOf, trunkOf, isWip, type Hung, type ScopeEntry, type State } from "./i01a1c72ba0a67a64836f167c23ffa097.ts";
+import { LEGACY_ID, adoptTrunk, isDive as isLegacyDive, describeDive, diveBranch, diveBranches, diveLinks, emailOf, featIdOf, fetchAll, fetchUpstream, heroBranch, heroDoc, homeOf, homeUpstream, isDiveRef, isOver, keyOf, metaOf, openDives, orphan, parseDiveBranch, patchWarnings, pushRecord, readScopes, repoDoc, scopesWith, stateLinksOf, swapIgnored, syncHome, tokenOf, trunkOf, isWip, type Hung, type ScopeEntry, type State } from "./i01a1c72ba0a67a64836f167c23ffa097.ts";
 import { i01a1c72ba0b57a0c80e3fdd641d001a8 as recordDive, type Doc, type Hero } from "./i01a1c72ba0b57a0c80e3fdd641d001a8.ts";
 import { i01a1c72ba0c37d27a058e908481307c3 as runGit } from "./i01a1c72ba0c37d27a058e908481307c3.ts";
 
@@ -37,6 +37,8 @@ export async function i0e2024913efd5dc8afe194f5650bda20(args: Args, ctx: Ctx): P
 	let home: string;
 	let token: string;
 	let mode: Mode;
+	let unpushed: string[] = [];
+	let upstream = "";
 	// Where the target hangs, by its state link, when it is a dive; a feat hangs from nothing.
 	let hung: Hung | undefined;
 	const deck = parseDiveBranch(on);
@@ -54,10 +56,13 @@ export async function i0e2024913efd5dc8afe194f5650bda20(args: Args, ctx: Ctx): P
 	} else {
 		home = on;
 		if (runGit(hero.dir, "status", "--porcelain").text) throw new Error("the hero has uncommitted changes, and jump switches its branch: commit them first (jump-needs-clean-tree)");
+		const adopted = adoptTrunk(hero, home);
+		if (adopted) ctx.out(adopted);
 		const up = homeUpstream(hero, home);
 		// A dive minted or packed from another checkout sharing the home's upstream is there, not yet here.
 		fetchUpstream(hero, up);
-		syncHome(hero, home, up);
+		unpushed = syncHome(hero, home, up);
+		upstream = `${up.remote}/${up.name}`;
 		token = tokenOf(hero, home);
 		const holder = `${me}#${token}`;
 		// A refusal names the open dives itself, though next lists them too.
@@ -202,6 +207,7 @@ export async function i0e2024913efd5dc8afe194f5650bda20(args: Args, ctx: Ctx): P
 			if (diver && diver !== holder && !bareDiverIs(diver, me)) throw new Error(`dive ${String(dive.fm.name)} was picked up by ${diver.split("#")[0]} meanwhile`);
 			recordDive(hero, dive, { action: "jump", label: "jumped", state: "jumped", summary: `${me} picked it up`, meta: { diver: holder, packer: null }, scopes: scopesWith(hero, dive, refs), lines: [`${me} picked it up.`, "", ...lines], also }, ctx.capes[0]!.version);
 		});
+		if (unpushed.length > 0) ctx.out([`jump: published ${unpushed.length} commit${unpushed.length === 1 ? "" : "s"} nosedive made on ${home} to ${upstream} with its record:`, ...unpushed].join("\n"));
 	}
 	if (mode !== "again") {
 		// The dive branch, cut from the home's tip after the jump record, its packed hero work replayed on it (dive-branches).

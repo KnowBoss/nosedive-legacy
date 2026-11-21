@@ -2,12 +2,12 @@ import { existsSync } from "node:fs";
 import { dirname, isAbsolute, join, relative } from "node:path";
 import type { Args, Bridge, Ctx } from "nosedive-core";
 import { i01a1335485c67c95b7efdf2f0e03cfd6 as findBridge } from "nosedive-core";
-import { coAuthor, fetchExact, replay, stampRange } from "nosedive-core";
-import type { RemoteUpdate, Sha, Step } from "nosedive-core";
+import { coAuthor, commitOffside, docAt, fetchExact, replay, stampRange } from "nosedive-core";
+import type { LocalStep, RemoteUpdate, Sha, Step } from "nosedive-core";
 import { executeGates, heroDocs, linksOf, scriptOf, type GateResult, type Selected } from "./i01a1b131e31f7b329bc1c4389343491a.ts";
 import { reachedFeats } from "./iffb5aa30b4e659e68b40ad7dee378a62.ts";
 import { i01a1c72ba0a67a64836f167c23ffa097 as diveOnDeck, type Dive, carry, diveRefs, durableFeat, emailOf, fetchHome, heroDoc, homeUpdate, homeUpstream, keyOf, localDiveRefs, packIgnored, planHome, readOnlyRefusals, recordOn, replanning, scopesWith } from "./i01a1c72ba0a67a64836f167c23ffa097.ts";
-import { commitSection } from "./i01a1c72ba0b57a0c80e3fdd641d001a8.ts";
+import { sectionChange } from "./i01a1c72ba0b57a0c80e3fdd641d001a8.ts";
 import { i01a1c72ba0c37d27a058e908481307c3 as runGit } from "./i01a1c72ba0c37d27a058e908481307c3.ts";
 
 export async function i3b8461aa9eac5f10837c2515b5231e78(args: Args, ctx: Ctx): Promise<void> {
@@ -20,6 +20,8 @@ export async function i3b8461aa9eac5f10837c2515b5231e78(args: Args, ctx: Ctx): P
 	const version = ctx.capes[0]!.version;
 
 	let gated = false;
+	let gateRun: { results: GateResult[]; heading: string; blocking: GateResult[] } | undefined;
+	let report: { parent: Sha; tip: Sha; made: Set<Sha> } | undefined;
 	const lines = await replanning(async () => {
 		// Every refusal is found before anything is pushed, and so is every conflict.
 		const refused = readOnlyRefusals(dive);
@@ -67,15 +69,21 @@ export async function i3b8461aa9eac5f10837c2515b5231e78(args: Args, ctx: Ctx): P
 			gated = true;
 			const live = Object.fromEntries(dive.scopes.filter((scope) => scope.ours).map((scope) => [scope.name, { id: scope.repoId, root: relative(hero.dir, scope.dir).replace(/\\/g, "/") }]));
 			const results = await executeGates(hero, gates, { id, doc: dive.doc, featId: dive.featId, scopes: [] }, ctx, live);
-			recordReport(hero, id, results, version);
 			const blocking = results.filter((result) => !result.ok && !result.flaky);
-			if (blocking.length > 0) throw new Error(`nothing was landed: ${blocking.length} gate${blocking.length === 1 ? "" : "s"} failed: ${blocking.map((gate) => gate.name).join(", ")}; the report is on the dive`);
+			gateRun = { results, heading: `## Land report ${new Date().toISOString()}`, blocking };
+		}
+		const head0 = runGit(hero.dir, "rev-parse", "HEAD").text;
+		if (gateRun && report?.parent !== head0) report = recordReport(hero, head0, keyOf(hero, dive.doc), gateRun.heading, gateRun.results, version);
+		if (gateRun && gateRun.blocking.length > 0) {
+			const branch = `refs/heads/${dive.branch}`;
+			carry({ steps: [{ repo: "hero", dir: hero.dir, local: { moves: [{ ref: branch, old: head0, new: report!.tip }], files: { from: head0, to: report!.tip } } }] }, "land");
+			throw new Error(`nothing was landed: ${gateRun.blocking.length} gate${gateRun.blocking.length === 1 ? "" : "s"} failed: ${gateRun.blocking.map((gate) => gate.name).join(", ")}; the report is on the dive`);
 		}
 
 		const trailers = [`Nosedive-Dive: ${id}`, `Nosedive-Feat: ${durableFeat(hero, dive, ctx.capes)}`, coAuthor(version)];
 		const notes: string[] = [];
 		const steps: Step[] = [];
-		const after: Step[] = [];
+		const after: LocalStep[] = [];
 		const branch = `refs/heads/${dive.branch}`;
 		for (const scope of writable) {
 			const work = found.get(scope.repoId) ?? null;
@@ -101,7 +109,7 @@ export async function i3b8461aa9eac5f10837c2515b5231e78(args: Args, ctx: Ctx): P
 		}
 
 		// The hero's own work, replayed onto the home as it is to be published, then stamped; a conflict is met here, before any scope is pushed.
-		const d0 = runGit(hero.dir, "rev-parse", "HEAD").text;
+		const d0 = report?.tip ?? head0;
 		const work = runGit(hero.dir, "rev-list", "--reverse", "--topo-order", d0, "--not", `refs/heads/${home}`).text.split("\n").filter(Boolean);
 		const set = new Set<Sha>();
 		let heroTip: Sha = homePlan.tip;
@@ -124,15 +132,15 @@ export async function i3b8461aa9eac5f10837c2515b5231e78(args: Args, ctx: Ctx): P
 		steps.push({
 			repo: "hero",
 			dir: hero.dir,
-			remote: { name: up.remote, updates: [homeUpdate(homePlan, made.tip, [...set, made.tip]), ...heroSeen.map(({ ref, sha }): RemoteUpdate => ({ ref, old: sha, new: null, fastForward: false }))] },
+			remote: { name: up.remote, updates: [...heroSeen.map(({ ref, sha }): RemoteUpdate => ({ ref, old: sha, new: null, fastForward: false })), homeUpdate(homePlan, made.tip, [...set, made.tip])] },
 			local: {
 				moves: [
 					{ ref: `refs/heads/${home}`, old: homePlan.old, new: made.tip },
 					...localDiveRefs(hero.dir, id).map(({ ref, sha }) => ({ ref, old: sha, new: null })),
 				],
 				head: { from: { branch: dive.branch }, to: { branch: home } },
-				files: { from: d0, to: made.tip },
-				drop: [{ ref: branch, old: d0, new: null }],
+				files: { from: head0, to: made.tip },
+				drop: [{ ref: branch, old: head0, new: null }],
 			},
 		});
 		carry({ steps, after }, "land");
@@ -178,15 +186,17 @@ function selectGates(hero: Bridge, dive: Dive, refused: string[]): Selected[] {
 	return found.sort((a, b) => b.height - a.height).map((each) => each.selected);
 }
 
-/** Appends `## Land report <timestamp>` to the dive and commits it on the dive's branch, which the land or the next jump carries. */
-function recordReport(hero: Bridge, id: string, results: GateResult[], version: string): void {
-	const doc = heroDoc(hero, id)!;
+/** Builds a report commit from the dive doc at the planned parent, without touching a file or ref. */
+function recordReport(hero: Bridge, parent: Sha, rel: string, heading: string, results: GateResult[], version: string): { parent: Sha; tip: Sha; made: Set<Sha> } {
+	const doc = docAt(hero.dir, parent, rel);
+	if (!doc) throw new Error(`${rel} is no dive at ${parent.slice(0, 7)}`);
 	const lines = results.map((result) => {
-		const link = `[${result.name}](${relative(dirname(doc.path), result.gate.path).replace(/\\/g, "/")})`;
+		const link = `[${result.name}](${relative(dirname(join(hero.dir, rel)), result.gate.path).replace(/\\/g, "/")})`;
 		if (result.ok) return `- ${link}: passed in ${result.ms}ms`;
 		const stderr = result.stderr.trimEnd().split("\n").map((line) => `  ${line}`.trimEnd());
 		return [`- ${link}: failed${result.flaky ? " (flaky, a warning)" : ""} in ${result.ms}ms`, "", `  script: ${result.script}`, "", "  ```", ...stderr, "  ```"].join("\n");
 	});
 	const failed = results.filter((result) => !result.ok).length;
-	commitSection(hero, doc, `## Land report ${new Date().toISOString()}`, lines, { action: "land", summary: `ran ${results.length} gate${results.length === 1 ? "" : "s"}, ${failed} failed` }, version);
+	const change = sectionChange(doc, heading, lines, { action: "land", summary: `ran ${results.length} gate${results.length === 1 ? "" : "s"}, ${failed} failed` });
+	return { parent, ...commitOffside(hero.dir, parent, { [rel]: change.text }, change.message, version) };
 }

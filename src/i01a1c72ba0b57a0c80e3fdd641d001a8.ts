@@ -1,7 +1,5 @@
 import type { GateCtx, KbDoc } from "nosedive-core";
 import { i01a13354845c7253a55b60bba87285d8 as findKbDoc } from "nosedive-core";
-import { i01a13354894273b1be253424511ba82c as commitFiles } from "nosedive-core";
-import { i01a1335483aa776cb84df698b04adc06 as writeKbDoc } from "nosedive-core";
 import { kingsmetal } from "nosedive-core";
 import { type State } from "./i01a1c72ba0a67a64836f167c23ffa097.ts";
 
@@ -37,12 +35,10 @@ export function i01a1c72ba0b57a0c80e3fdd641d001a8(doc: KbDoc, change: Change): {
 	return { text: `---\n${doc.yaml.toString({ lineWidth: 0 })}---\n${body}`, message: `${change.action}(${String(doc.fm.name)}): ${change.summary}` };
 }
 
-/** Appends a section under `heading` to the dive's doc and commits it, as `<action>(<dive name>): <summary>`, with nothing else changed. */
-export function commitSection(hero: Hero, doc: Doc, heading: string, lines: string[], message: { action: string; summary: string }, version: string): void {
+/** The text and message for a section appended to the exact doc read from a planned parent; writes no file or ref. */
+export function sectionChange(doc: KbDoc, heading: string, lines: string[], message: { action: string; summary: string }): { text: string; message: string } {
 	const body = `${doc.body.replace(/\n*$/, "\n")}\n${heading}\n\n${lines.join("\n")}\n`;
-	writeKbDoc(doc.path, doc.yaml, body);
-	doc.body = body;
-	commitFiles(hero.dir, [doc.path], `${message.action}(${String(doc.fm.name)}): ${message.summary}`, version);
+	return { text: `---\n${doc.yaml.toString({ lineWidth: 0 })}---\n${body}`, message: `${message.action}(${String(doc.fm.name)}): ${message.summary}` };
 }
 
 /** A body with a `## <iso time> <label>` section appended, as every record of a dive heads its own. */

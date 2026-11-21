@@ -165,6 +165,22 @@ test("one blocking failure pushes nothing, leaves the dive held and reports the 
 	assert.doesNotMatch(f.doc(id), / landed\n/);
 });
 
+test("builds a gate report offside and moves the dive ref through the publish plan", async () => {
+	const f = fixture("land-gate-offside");
+	await jump({ ref: f.featId }, f.ctx);
+	const id = f.onDeck();
+	const passing = gate(f, "passing");
+	declare(join(f.hero, "kb", `${id}.md`), passing, "rel: land.gate");
+	commitAll(f, "gate");
+	const hooks = join(git(f.hero, "rev-parse", "--path-format=absolute", "--git-common-dir"), "hooks");
+	writeFileSync(join(hooks, "pre-commit"), "#!/bin/sh\necho porcelain commit forbidden >&2\nexit 1\n", { mode: 0o755 });
+	f.commit("idea.md", "an idea\n");
+
+	await land({}, f.ctx);
+
+	assert.match(f.doc(id), new RegExp(`## Land report [^\\n]+\\n\\n- \\[passing\\]\\(${passing}\\.md\\): passed`));
+});
+
 test("refuses, before running anything, a gate with no test-script and one whose doc or script is uncommitted, naming each", async () => {
 	const f = fixture("land-gate-refusals");
 	await jump({ ref: f.featId }, f.ctx);

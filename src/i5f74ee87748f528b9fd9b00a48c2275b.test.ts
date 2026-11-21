@@ -1,12 +1,13 @@
 // pack [<dive>]
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { unzipSync } from "fflate";
 import { join } from "node:path";
 import { test } from "node:test";
 import { i0e2024913efd5dc8afe194f5650bda20 as jump } from "./i0e2024913efd5dc8afe194f5650bda20.ts";
 import { i5f74ee87748f528b9fd9b00a48c2275b as pack } from "./i5f74ee87748f528b9fd9b00a48c2275b.ts";
+import { fetchAll } from "./i01a1c72ba0a67a64836f167c23ffa097.ts";
 import { loopFixture as fixture, git } from "../test/harness.ts";
 
 function rejectDelete(remote: string, ref: string): string {
@@ -61,6 +62,27 @@ test("keeps the work on the dive's ref, uncommitted changes and all, packs ignor
 	assert.equal(git(f.checkout, "status", "--porcelain"), "M README.md\n?? draft.md", "uncommitted again");
 	assert.equal(readFileSync(join(f.checkout, "secrets.local"), "utf8"), "KEY=secret\n", "the feat's ignored files are back");
 	assert.doesNotMatch(f.doc(id), /packer:/);
+});
+
+test("an ignored file rewritten during publication is captured, never cleaned from an older path list", async () => {
+	const f = fixture("pack-ignored-race");
+	await jump({ ref: f.featId }, f.ctx);
+	writeFileSync(join(f.checkout, ".gitignore"), "secrets.local\n");
+	f.commit("idea.md", "an idea\n");
+	writeFileSync(join(f.checkout, "secrets.local"), "before\n");
+	const hook = join(git(f.checkout, "rev-parse", "--path-format=absolute", "--git-common-dir"), "hooks", "pre-push");
+	writeFileSync(hook, `#!/bin/sh\nprintf 'during publish\\n' > "${join(f.checkout, "secrets.local").replace(/\\/g, "/")}"\nexit 0\n`, { mode: 0o755 });
+
+	await pack({}, f.ctx);
+
+	const zip = unzipSync(new Uint8Array(readFileSync(join(f.hero, ".nosedive", "local", "packs", f.featId, "data.zip"))));
+	assert.equal(new TextDecoder().decode(zip["secrets.local"]), "during publish\n");
+});
+
+test("fetchAll refuses a scope fetch failure", () => {
+	const f = fixture("fetch-all-failure");
+	renameSync(f.remote, `${f.remote}-offline`);
+	assert.throws(() => fetchAll(f.checkout), /cannot fetch origin/);
 });
 
 test("packs ignored regular files only: a venv is remade, and a symlink, even to a directory, is not read", async () => {
@@ -218,7 +240,7 @@ test("a stale per-ref lease stops cleanup after publication and keeps local work
 		assert.match(String(error), new RegExp(legacy.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
 		return true;
 	});
-	assert.equal(f.remoteRef(own), oldTip, "the push is atomic: the destination was not published without the deletion");
+	assert.equal(f.remoteRef(own), target, "work published first is a safe prefix when a later deletion is stale");
 	assert.notEqual(f.remoteRef(legacy), "", "the concurrent update was not deleted");
 	assert.equal(f.onDeck(), id, "the dive branch remains active");
 	assert.equal(git(f.checkout, "rev-parse", "HEAD"), target, "scope work remains on its local branch");
@@ -257,7 +279,7 @@ test("retries after partial cleanup across a scope and the hero", async () => {
 	assert.equal(f.remoteRef(dataA), "", "scope cleanup completed before the hero failure");
 	assert.equal(f.remoteRef(dataZ), "");
 	assert.equal(git(heroRemote, "rev-parse", heroLegacy), heroOriginal, "the failed deletion remains");
-	assert.equal(git(heroRemote, "for-each-ref", `refs/nosedive/${f.heroId}/dives/${id}`), "", "the hero's push is atomic: its dive ref and record landed with the deletion or not at all");
+	assert.equal(git(heroRemote, "rev-parse", `refs/nosedive/${f.heroId}/dives/${id}`), heroTarget, "hero work published before the failed deletion, while the record stayed last");
 	assert.equal(git(f.hero, "rev-parse", "HEAD"), heroTarget, "hero work remains recoverable");
 	assert.equal(git(f.checkout, "rev-parse", "HEAD"), dataTarget, "scope work remains recoverable");
 	assert.equal(f.onDeck(), id);

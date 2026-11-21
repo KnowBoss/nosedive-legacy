@@ -5,7 +5,7 @@ import { i01a1335485c67c95b7efdf2f0e03cfd6 as findBridge } from "nosedive-core";
 import { coAuthor } from "nosedive-core";
 import { executeGates, heroDocs, linksOf, scriptOf, type GateResult, type Selected } from "./i01a1b131e31f7b329bc1c4389343491a.ts";
 import { reachedFeats } from "./iffb5aa30b4e659e68b40ad7dee378a62.ts";
-import { i01a1c72ba0a67a64836f167c23ffa097 as diveOnDeck, type Dive, deleteRefs, diveRefs, durableFeat, emailOf, fetchUpstream, heroDoc, homeUpstream, packIgnored, pushRecord, readOnlyRefusals, scopesWith, stamp, syncHome } from "./i01a1c72ba0a67a64836f167c23ffa097.ts";
+import { i01a1c72ba0a67a64836f167c23ffa097 as diveOnDeck, type Dive, deleteRefs, diveRefs, durableFeat, emailOf, checkHome, fetchUpstream, heroDoc, homeUpstream, packIgnored, pushRecord, readOnlyRefusals, scopesWith, stamp, syncHome } from "./i01a1c72ba0a67a64836f167c23ffa097.ts";
 import { i01a1c72ba0b57a0c80e3fdd641d001a8 as recordDive, commitSection } from "./i01a1c72ba0b57a0c80e3fdd641d001a8.ts";
 import { i01a1c72ba0c37d27a058e908481307c3 as runGit } from "./i01a1c72ba0c37d27a058e908481307c3.ts";
 
@@ -23,9 +23,9 @@ export async function i3b8461aa9eac5f10837c2515b5231e78(args: Args, ctx: Ctx): P
 	// The hero's work goes home, the branch the dive was jumped from, which must be its upstream's (records-on-jumped-branch).
 	const { home } = dive;
 	const up = homeUpstream(hero, home);
-	fetchUpstream(hero, up);
 	try {
-		syncHome(hero, home, up, true);
+		fetchUpstream(hero, up);
+		checkHome(hero, home, up);
 	} catch (error) {
 		refused.push((error as Error).message);
 	}
@@ -51,6 +51,9 @@ export async function i3b8461aa9eac5f10837c2515b5231e78(args: Args, ctx: Ctx): P
 		const blocking = results.filter((result) => !result.ok && !result.flaky);
 		if (blocking.length > 0) throw new Error(`nothing was landed: ${blocking.length} gate${blocking.length === 1 ? "" : "s"} failed: ${blocking.map((gate) => gate.name).join(", ")}; the report is on the dive`);
 	}
+
+	// The home's commits nosedive made go first, replayed and pushed, so the dive's hero work is rebased onto what is published.
+	syncHome(hero, home, up);
 
 	const trailers = [`Nosedive-Dive: ${id}`, `Nosedive-Feat: ${durableFeat(hero, dive, ctx.capes)}`, coAuthor(ctx.capes[0]!.version)];
 	const lines: string[] = [];

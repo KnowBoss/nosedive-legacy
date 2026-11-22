@@ -6,7 +6,7 @@ import { coAuthor, commitOffside, docAt, fetchExact, replay, stampRange } from "
 import type { LocalStep, RemoteUpdate, Sha, Step } from "nosedive-core";
 import { executeGates, heroDocs, linksOf, scriptOf, type GateResult, type Selected } from "./i01a1b131e31f7b329bc1c4389343491a.ts";
 import { reachedFeats } from "./iffb5aa30b4e659e68b40ad7dee378a62.ts";
-import { i01a1c72ba0a67a64836f167c23ffa097 as diveOnDeck, type Dive, assertHeld, carry, diveRefs, heroRef, durableFeat, emailOf, fetchHome, heroDoc, homeUpdate, homeUpstream, keyOf, localDiveRefs, packIgnored, planHome, readOnlyRefusals, recordOn, replanning, scopesWith } from "./i01a1c72ba0a67a64836f167c23ffa097.ts";
+import { i01a1c72ba0a67a64836f167c23ffa097 as diveOnDeck, type Dive, assertHeld, carry, diveRefs, heroRef, keepOrphans, durableFeat, emailOf, fetchHome, heroDoc, homeUpdate, homeUpstream, keyOf, localDiveRefs, packIgnored, planHome, readOnlyRefusals, recordOn, replanning, scopesWith } from "./i01a1c72ba0a67a64836f167c23ffa097.ts";
 import { sectionChange } from "./i01a1c72ba0b57a0c80e3fdd641d001a8.ts";
 import { i01a1c72ba0c37d27a058e908481307c3 as runGit } from "./i01a1c72ba0c37d27a058e908481307c3.ts";
 
@@ -105,10 +105,13 @@ export async function i3b8461aa9eac5f10837c2515b5231e78(args: Args, ctx: Ctx): P
 			const sourceRef = `refs/nosedive-source/${hero.id}/${id}/${scope.repoId}`;
 			// What this checkout held before it stamped, written down so a retry still knows the unstamped tips it may delete.
 			const source = runGit(scope.dir, "rev-parse", "--verify", "-q", sourceRef).text;
-			const kept = (sha: Sha) => sha === scope.ref || (source !== "" && runGit(scope.dir, "merge-base", "--is-ancestor", sha, source).ok) || (scope.ref !== undefined && runGit(scope.dir, "merge-base", "--is-ancestor", sha, scope.ref).ok) || runGit(scope.dir, "merge-base", "--is-ancestor", sha, head).ok;
+			// The tip this land published, written down before it pushed: in recovery it is the only thing the dive's refs may be judged against.
+			const landedRef = `refs/nosedive-landed-scope/${hero.id}/${id}/${scope.repoId}`;
+			const landedTip = runGit(scope.dir, "rev-parse", "--verify", "-q", landedRef).text;
+			const kept = (sha: Sha) => sha === scope.ref || (landedTip !== "" && runGit(scope.dir, "merge-base", "--is-ancestor", sha, landedTip).ok) || (source !== "" && runGit(scope.dir, "merge-base", "--is-ancestor", sha, source).ok) || (scope.ref !== undefined && runGit(scope.dir, "merge-base", "--is-ancestor", sha, scope.ref).ok) || (!already && runGit(scope.dir, "merge-base", "--is-ancestor", sha, head).ok);
 			const lost = seen.filter(({ sha }) => !kept(sha));
 			if (lost.length > 0) throw new Error(`nothing was landed: ${scope.name}: ${lost.map(({ ref, sha }) => `${ref} is at ${sha.slice(0, 7)}`).join(", ")}, work this dive did not see and the landed work does not hold: jump the dive to take it in, or delete the ref by hand`);
-			const stampedHead = base && runGit(scope.dir, "rev-list", "--count", `${base}..${head}`).text === "0" ? undefined : stampRange(scope.dir, base, head, trailers);
+			const stampedHead = already || (base && runGit(scope.dir, "rev-list", "--count", `${base}..${head}`).text === "0") ? undefined : stampRange(scope.dir, base, head, trailers);
 			const updates: RemoteUpdate[] = [];
 			if (stampedHead) {
 				updates.push({ ref: `refs/heads/${scope.branch}`, old: work, new: stampedHead.tip, fastForward: true, publishes: stampedHead.made });
@@ -117,13 +120,22 @@ export async function i3b8461aa9eac5f10837c2515b5231e78(args: Args, ctx: Ctx): P
 			for (const { ref, sha } of seen) updates.push({ ref, old: sha, new: null, fastForward: false });
 			const tip = stampedHead?.tip ?? head;
 			// The branch moves to the stamped commits before anything is pushed, so a retry finds its own published tip at HEAD.
-			if (tip !== head) steps.push({ repo: scope.name, dir: scope.dir, local: { moves: [{ ref: branch, old: head, new: tip }, { ref: sourceRef, old: source || null, new: source || head }] } });
+			if (!already) steps.push({ repo: scope.name, dir: scope.dir, local: { moves: [...(tip !== head ? [{ ref: branch, old: head, new: tip }] : []), { ref: sourceRef, old: source || null, new: source || head }, { ref: landedRef, old: landedTip || null, new: tip }] } });
+			// Work made after the failed land is not this land's to publish or to drop: it is kept, on an orphan ref, and the branch stays.
+			const extra = already && landedTip !== "" && head !== landedTip && !runGit(scope.dir, "merge-base", "--is-ancestor", head, landedTip).ok;
+			const orphan = extra ? keepOrphans(hero, scope.dir, head) : undefined;
+			if (orphan) {
+				ctx.err(`warning: ${scope.name} holds ${orphan.commits.length} commit${orphan.commits.length === 1 ? "" : "s"} made after the failed land, which were not landed and are kept on this machine only, under ${orphan.ref}:\n  ${orphan.commits.join("\n  ")}\nto recover ${orphan.commits.length === 1 ? "it" : "them"}: git switch -c <name> ${orphan.ref}`);
+				notes.push(`- ${scope.name}: ${orphan.commits.length} later commit${orphan.commits.length === 1 ? "" : "s"} kept on ${orphan.ref}`);
+			}
 			const moves = [
+				...(orphan ? [orphan.move] : []),
 				...localDiveRefs(scope.dir, id).map(({ ref, sha }) => ({ ref, old: sha, new: null })),
 			];
 			steps.push({ repo: scope.name, dir: scope.dir, ...(updates.length > 0 ? { remote: { name: "origin", updates } } : {}), local: { moves } });
-			// Left where it landed, its branch gone: the work branch holds it now.
-			after.push({ repo: scope.name, dir: scope.dir, local: { head: { from: { branch: dive.branch }, to: { detached: tip } }, drop: [{ ref: branch, old: tip, new: null }, ...(tip !== head || source ? [{ ref: sourceRef, old: source || head, new: null }] : [])] } });
+			// Left where it landed, its branch gone: the work branch holds it now. A branch that moved on stays as it is.
+			if (!extra) after.push({ repo: scope.name, dir: scope.dir, local: { head: { from: { branch: dive.branch }, to: { detached: tip } }, drop: [{ ref: branch, old: tip, new: null }, ...(source || !already ? [{ ref: sourceRef, old: source || head, new: null }] : []), ...(landedTip || !already ? [{ ref: landedRef, old: landedTip || tip, new: null }] : [])] } })
+			else after.push({ repo: scope.name, dir: scope.dir, local: { drop: [...(source ? [{ ref: sourceRef, old: source, new: null }] : []), { ref: landedRef, old: landedTip, new: null }] } });
 		}
 
 		// The hero's own work, replayed onto the home as it is to be published, then stamped; a conflict is met here, before any scope is pushed.
@@ -149,9 +161,15 @@ export async function i3b8461aa9eac5f10837c2515b5231e78(args: Args, ctx: Ctx): P
 		const made = already ? { tip: homePlan.tip } : recordOn(hero, heroTip, keyOf(hero, doc), { action: "land", label: "landed", summary: `${me} landed it`, state: "landed", meta: { diver: null }, scopes: scopesWith(hero, doc, cleared), lines: [`${me} landed it.`, "", ...notes] }, version);
 		const heroSeen = diveRefs(hero.dir, id);
 		const recorded = heroRef(hero, dive.doc);
-		const lostHero = heroSeen.filter(({ sha }) => !(sha === recorded || (recorded !== undefined && runGit(hero.dir, "merge-base", "--is-ancestor", sha, recorded).ok) || runGit(hero.dir, "merge-base", "--is-ancestor", sha, d0).ok));
+		// What the dive branch held when this land first ran; in recovery the dive's refs are judged against it, not against what the branch holds now.
+		const heroSrcRef = `refs/nosedive-landed-src/${hero.id}/${id}`;
+		const heroSrc = runGit(hero.dir, "rev-parse", "--verify", "-q", heroSrcRef).text;
+		const extraHero = already && heroSrc !== "" && head0 !== heroSrc && !runGit(hero.dir, "merge-base", "--is-ancestor", head0, heroSrc).ok;
+		const orphanHero = extraHero ? keepOrphans(hero, hero.dir, head0) : undefined;
+		if (orphanHero) ctx.err(`warning: the hero holds ${orphanHero.commits.length} commit${orphanHero.commits.length === 1 ? "" : "s"} made after the failed land, which were not landed and are kept on this machine only, under ${orphanHero.ref}:\n  ${orphanHero.commits.join("\n  ")}\nto recover ${orphanHero.commits.length === 1 ? "it" : "them"}: git switch -c <name> ${orphanHero.ref}`);
+		const lostHero = heroSeen.filter(({ sha }) => !(sha === recorded || (recorded !== undefined && runGit(hero.dir, "merge-base", "--is-ancestor", sha, recorded).ok) || (already ? heroSrc !== "" && runGit(hero.dir, "merge-base", "--is-ancestor", sha, heroSrc).ok : runGit(hero.dir, "merge-base", "--is-ancestor", sha, d0).ok)));
 		if (lostHero.length > 0) throw new Error(`nothing was landed: hero: ${lostHero.map(({ ref, sha }) => `${ref} is at ${sha.slice(0, 7)}`).join(", ")}, work this dive did not see and the landed work does not hold: jump the dive to take it in, or delete the ref by hand`);
-		if (!already) steps.push({ repo: "hero", dir: hero.dir, local: { moves: [{ ref: markerRef, old: marker ?? null, new: made.tip }] } });
+		if (!already) steps.push({ repo: "hero", dir: hero.dir, local: { moves: [{ ref: markerRef, old: marker ?? null, new: made.tip }, { ref: heroSrcRef, old: heroSrc || null, new: heroSrc || head0 }] } });
 		steps.push({
 			repo: "hero",
 			dir: hero.dir,
@@ -159,15 +177,16 @@ export async function i3b8461aa9eac5f10837c2515b5231e78(args: Args, ctx: Ctx): P
 			local: {
 				moves: [
 					{ ref: `refs/heads/${home}`, old: homePlan.old, new: made.tip },
+					...(orphanHero ? [orphanHero.move] : []),
 					...localDiveRefs(hero.dir, id).map(({ ref, sha }) => ({ ref, old: sha, new: null })),
 				],
 				head: { from: { branch: dive.branch }, to: { branch: home } },
 				files: { from: head0, to: made.tip },
-				drop: [{ ref: branch, old: head0, new: null }],
+				drop: extraHero ? [] : [{ ref: branch, old: head0, new: null }],
 			},
 		});
 		// The marker goes only once everything else is done; it is not verified up front, since an earlier step writes it.
-		after.push({ repo: "hero", dir: hero.dir, local: { drop: [{ ref: markerRef, old: marker ?? made.tip, new: null }] } });
+		after.push({ repo: "hero", dir: hero.dir, local: { drop: [{ ref: markerRef, old: marker ?? made.tip, new: null }, ...(heroSrc || !already ? [{ ref: heroSrcRef, old: heroSrc || head0, new: null }] : [])] } });
 		carry({ steps, after }, "land");
 		return notes;
 	});

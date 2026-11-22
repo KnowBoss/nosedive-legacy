@@ -174,7 +174,7 @@ export async function i3b8461aa9eac5f10837c2515b5231e78(args: Args, ctx: Ctx): P
 		let heroTip: Sha = homePlan.tip;
 		// A rerun replays the dive as it is now: what the failed run landed is already on the home, so it replays to nothing.
 		if (work.length > 0) {
-			const replayed = replay(hero.dir, work, homePlan.tip);
+			const replayed = replay(hero.dir, work, homePlan.tip, { turnsIn: keyOf(hero, dive.doc) });
 			if ("conflict" in replayed) throw new Error(`the hero's work conflicts with ${home}, so nothing was landed: rebase ${dive.branch} onto ${home}, then land ${id} again\n${replayed.conflict}`);
 			for (const sha of replayed.made) set.add(sha);
 			const stamped = stampRange(hero.dir, homePlan.tip, replayed.tip, trailers);

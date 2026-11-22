@@ -1,7 +1,7 @@
 // land [<dive>]
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { i0e2024913efd5dc8afe194f5650bda20 as jump } from "./i0e2024913efd5dc8afe194f5650bda20.ts";
@@ -165,6 +165,22 @@ test("one blocking failure pushes nothing, leaves the dive held and reports the 
 	assert.doesNotMatch(f.doc(id), / landed\n/);
 });
 
+test("builds a gate report offside and moves the dive ref through the publish plan", async () => {
+	const f = fixture("land-gate-offside");
+	await jump({ ref: f.featId }, f.ctx);
+	const id = f.onDeck();
+	const passing = gate(f, "passing");
+	declare(join(f.hero, "kb", `${id}.md`), passing, "rel: land.gate");
+	commitAll(f, "gate");
+	const hooks = join(git(f.hero, "rev-parse", "--path-format=absolute", "--git-common-dir"), "hooks");
+	writeFileSync(join(hooks, "pre-commit"), "#!/bin/sh\necho porcelain commit forbidden >&2\nexit 1\n", { mode: 0o755 });
+	f.commit("idea.md", "an idea\n");
+
+	await land({}, f.ctx);
+
+	assert.match(f.doc(id), new RegExp(`## Land report [^\\n]+\\n\\n- \\[passing\\]\\(${passing}\\.md\\): passed`));
+});
+
 test("refuses, before running anything, a gate with no test-script and one whose doc or script is uncommitted, naming each", async () => {
 	const f = fixture("land-gate-refusals");
 	await jump({ ref: f.featId }, f.ctx);
@@ -205,4 +221,40 @@ appendFileSync(ctx.bridgeRoot + "/../seen.log", [ctx.repos.data.root, ctx.repos.
 	assert.equal(repo, f.repoId);
 	assert.equal(dive, id);
 	assert.equal(tree, git(f.remote, "rev-parse", "refs/heads/work/ideas^{tree}"), "the tree the gate saw is the one pushed");
+});
+
+test("results bind to the tips tested: a scope committed to while the gates ran is not landed on their word", async () => {
+	const f = fixture("land-gate-tips");
+	await jump({ ref: f.featId }, f.ctx);
+	const id = f.onDeck();
+	f.commit("idea.md", "an idea\n");
+	const dir = JSON.stringify(f.checkout);
+	const racing = gate(f, "racing", `const { execFileSync } = await import("node:child_process");\nconst { writeFileSync } = await import("node:fs");\nwriteFileSync(${JSON.stringify(join(f.checkout, "late.md"))}, "late");\nexecFileSync("git", ["add", "-A"], { cwd: ${dir} });\nexecFileSync("git", ["commit", "-q", "-m", "late"], { cwd: ${dir} });`);
+	declare(join(f.hero, "kb", `${id}.md`), racing, "rel: land.gate");
+	commitAll(f, "gate");
+	await assert.rejects(land({}, f.ctx), /changed while its gates ran, so their results do not cover what would be landed/);
+	assert.equal(f.remoteRef("refs/heads/work/ideas"), "", "nothing was pushed");
+	assert.equal(f.onDeck(), id);
+});
+
+test("a rerun after the hero record is published runs the gates on commits made since, and refuses on failure", async () => {
+	const f = fixture("land-rerun-gates");
+	await jump({ ref: f.featId }, f.ctx);
+	const id = f.onDeck();
+	f.commit("idea.md", "an idea\n");
+	const guard = JSON.stringify(join(f.checkout, "late.md"));
+	const strict = gate(f, "strict", `const { existsSync } = await import("node:fs");\nif (existsSync(${guard})) throw new Error("late work breaks it");`);
+	declare(join(f.hero, "kb", `${id}.md`), strict, "rel: land.gate");
+	commitAll(f, "gate");
+	const heroRemote = git(f.hero, "remote", "get-url", "origin");
+	const legacy = `refs/nosedive/dives/${f.heroId}/main/${id}`;
+	git(f.hero, "push", "-q", "origin", `HEAD:${legacy}`);
+	const hook = join(heroRemote, "hooks", "pre-receive");
+	writeFileSync(hook, `#!/bin/sh\nwhile read old new ref; do\n  if [ "$new" = "0000000000000000000000000000000000000000" ] && [ "$ref" = "${legacy}" ]; then\n    echo "injected deletion failure" >&2\n    exit 1\n  fi\ndone\nexit 0\n`, { mode: 0o755 });
+	await assert.rejects(land({}, f.ctx), /injected deletion failure/);
+	const published = f.remoteRef("refs/heads/work/ideas");
+	f.commit("late.md", "made after the failure\n");
+	rmSync(hook);
+	await assert.rejects(land({}, f.ctx), /gate.*failed|strict/);
+	assert.equal(f.remoteRef("refs/heads/work/ideas"), published, "the commit the gate failed on was not published");
 });

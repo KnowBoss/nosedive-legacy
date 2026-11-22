@@ -325,7 +325,7 @@ function commitPaths(dir: string, paths: string[], message: string): void {
 	// Paths go on stdin, not the command line, which caps how many fit on Windows.
 	const input = `${paths.join("\n")}\n`;
 	for (const args of [["add", "--pathspec-from-file=-"], ["commit", "-q", "-m", message, "--pathspec-from-file=-"]]) {
-		const result = spawnSync("git", args, { cwd: dir, encoding: "utf8", input });
+		const result = spawnSync("git", args, { cwd: dir, encoding: "utf8", input, env: { ...process.env, GIT_COMMITTER_NAME: "nosedive", GIT_COMMITTER_EMAIL: "noreply@nosedive.dev" } });
 		if (result.status !== 0) throw new Error(`git ${args[0]} failed: ${(result.stderr || result.stdout || "").trim()}`);
 	}
 }

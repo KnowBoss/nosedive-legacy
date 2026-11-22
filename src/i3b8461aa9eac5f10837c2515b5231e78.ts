@@ -84,7 +84,13 @@ export async function i3b8461aa9eac5f10837c2515b5231e78(args: Args, ctx: Ctx): P
 
 		// Gates see the checkouts as they are about to be pushed, and one blocking failure pushes nothing; they run once, whatever is planned again.
 		// Results bind to the tips tested: a retry whose tips differ runs them again.
-		if (gates.length > 0 && !already && (!gated || gateRun?.tested !== tipsNow())) {
+		// A rerun whose tips are all what the failed run published has nothing new for the gates; any other tip is gated before it is published.
+		const heroSrcNow = runGit(hero.dir, "rev-parse", "--verify", "-q", `refs/nosedive-landed-src/${hero.id}/${id}`).text;
+		const nothingNew = already && heroSrcNow !== "" && heroSrcNow === runGit(hero.dir, "rev-parse", "HEAD").text && writable.every((scope) => {
+			const published = runGit(scope.dir, "rev-parse", "--verify", "-q", `refs/nosedive-landed-scope/${hero.id}/${id}/${scope.repoId}`).text;
+			return published !== "" && published === runGit(scope.dir, "rev-parse", "HEAD").text;
+		});
+		if (gates.length > 0 && !nothingNew && (!gated || gateRun?.tested !== tipsNow())) {
 			gated = true;
 			const tested = tipsNow();
 			const live = Object.fromEntries(dive.scopes.filter((scope) => scope.ours).map((scope) => [scope.name, { id: scope.repoId, root: relative(hero.dir, scope.dir).replace(/\\/g, "/") }]));
@@ -133,7 +139,7 @@ export async function i3b8461aa9eac5f10837c2515b5231e78(args: Args, ctx: Ctx): P
 			const tip = stampedHead?.tip ?? head;
 			// The branch moves to the stamped commits before anything is pushed, so a retry finds its own published tip at HEAD.
 			pin(scope.dir, head, [tip]);
-			if (already && landedTip !== "") later.push(...runGit(scope.dir, "log", "--reverse", "--format=%h %s", `${landedTip}..${head}`).text.split("\n").filter(Boolean).map((line) => `  ${scope.name}: ${line}`));
+			if (landedTip !== "") later.push(...runGit(scope.dir, "log", "--reverse", "--format=%h %s", `${landedTip}..${head}`).text.split("\n").filter(Boolean).map((line) => `  ${scope.name}: ${line}`));
 			steps.push({ repo: scope.name, dir: scope.dir, local: { moves: [...(tip !== head ? [{ ref: branch, old: head, new: tip }] : []), { ref: sourceRef, old: source || null, new: source || head }, { ref: landedRef, old: landedTip || null, new: tip }] } });
 			const moves = [
 				...localDiveRefs(scope.dir, id).map(({ ref, sha }) => ({ ref, old: sha, new: null })),
@@ -144,8 +150,9 @@ export async function i3b8461aa9eac5f10837c2515b5231e78(args: Args, ctx: Ctx): P
 		}
 
 		// The hero's own work, replayed onto the home as it is to be published, then stamped; a conflict is met here, before any scope is pushed.
+		const heroSrcAtPlan = runGit(hero.dir, "rev-parse", "--verify", "-q", `refs/nosedive-landed-src/${hero.id}/${id}`).text;
 		const d0 = report?.tip ?? head0;
-		const work = runGit(hero.dir, "rev-list", "--reverse", "--topo-order", d0, "--not", `refs/heads/${home}`).text.split("\n").filter(Boolean);
+		const work = runGit(hero.dir, "rev-list", "--reverse", "--topo-order", head0, "--not", ...(already && heroSrcAtPlan !== "" ? [heroSrcAtPlan] : [`refs/heads/${home}`])).text.split("\n").filter(Boolean);
 		const set = new Set<Sha>();
 		let heroTip: Sha = homePlan.tip;
 		// A rerun replays the dive as it is now: what the failed run landed is already on the home, so it replays to nothing.
@@ -170,7 +177,7 @@ export async function i3b8461aa9eac5f10837c2515b5231e78(args: Args, ctx: Ctx): P
 		const heroSrcRef = `refs/nosedive-landed-src/${hero.id}/${id}`;
 		const heroSrc = runGit(hero.dir, "rev-parse", "--verify", "-q", heroSrcRef).text;
 		pin(hero.dir, head0, []);
-		if (already && heroSrc !== "") later.push(...runGit(hero.dir, "log", "--reverse", "--format=%h %s", `${heroSrc}..${head0}`).text.split("\n").filter(Boolean).map((line) => `  hero: ${line}`));
+		if (heroSrc !== "") later.push(...runGit(hero.dir, "log", "--reverse", "--format=%h %s", `${heroSrc}..${head0}`).text.split("\n").filter(Boolean).map((line) => `  hero: ${line}`));
 		const lostHero = heroSeen.filter(({ sha }) => !(sha === recorded || (recorded !== undefined && runGit(hero.dir, "merge-base", "--is-ancestor", sha, recorded).ok) || runGit(hero.dir, "merge-base", "--is-ancestor", sha, d0).ok || (heroSrc !== "" && runGit(hero.dir, "merge-base", "--is-ancestor", sha, heroSrc).ok)));
 		if (lostHero.length > 0) throw new Error(`nothing was landed: hero: ${lostHero.map(({ ref, sha }) => `${ref} is at ${sha.slice(0, 7)}`).join(", ")}, work this dive did not see and the landed work does not hold: jump the dive to take it in, or delete the ref by hand`);
 		if (!already) steps.push({ repo: "hero", dir: hero.dir, local: { moves: [{ ref: markerRef, old: marker ?? null, new: made.tip }, { ref: heroSrcRef, old: heroSrc || null, new: heroSrc || head0 }] } });
@@ -189,7 +196,7 @@ export async function i3b8461aa9eac5f10837c2515b5231e78(args: Args, ctx: Ctx): P
 			},
 		});
 		// The marker goes only once everything else is done; it is not verified up front, since an earlier step writes it.
-		after.push({ repo: "hero", dir: hero.dir, local: { drop: [{ ref: markerRef, old: marker ?? made.tip, new: null }, ...(heroSrc || !already ? [{ ref: heroSrcRef, old: heroSrc || head0, new: null }] : [])] } });
+		after.push({ repo: "hero", dir: hero.dir, local: { drop: [{ ref: markerRef, old: already ? marker! : made.tip, new: null }, ...(heroSrc || !already ? [{ ref: heroSrcRef, old: heroSrc || head0, new: null }] : [])] } });
 		if (later.length > 0) notes.push("- commits the failed land had not published, landed now:", ...later);
 		carry({ steps, after }, "land");
 		return notes;

@@ -65,11 +65,15 @@ export async function i3b8461aa9eac5f10837c2515b5231e78(args: Args, ctx: Ctx): P
 		}
 		const gates = selectGates(hero, dive, refused);
 		if (refused.length > 0 || !homePlan) throw new Error(`nothing was landed:\n  ${refused.join("\n  ")}`);
-		assertHeld(hero, dive, homePlan.tip);
+		// Written down before the record is pushed, so a retry can tell a record this land published from anyone else's.
+		const markerRef = `refs/nosedive-landed/${hero.id}/${id}`;
+		const marker = runGit(hero.dir, "rev-parse", "--verify", "-q", markerRef).text || undefined;
+		const already = marker !== undefined && homePlan.tip === marker;
+		assertHeld(hero, dive, homePlan.tip, marker);
 
 		// Gates see the checkouts as they are about to be pushed, and one blocking failure pushes nothing; they run once, whatever is planned again.
 		// Results bind to the tips tested: a retry whose tips differ runs them again.
-		if (gates.length > 0 && (!gated || gateRun?.tested !== tipsNow())) {
+		if (gates.length > 0 && !already && (!gated || gateRun?.tested !== tipsNow())) {
 			gated = true;
 			const tested = tipsNow();
 			const live = Object.fromEntries(dive.scopes.filter((scope) => scope.ours).map((scope) => [scope.name, { id: scope.repoId, root: relative(hero.dir, scope.dir).replace(/\\/g, "/") }]));
@@ -126,7 +130,8 @@ export async function i3b8461aa9eac5f10837c2515b5231e78(args: Args, ctx: Ctx): P
 		const work = runGit(hero.dir, "rev-list", "--reverse", "--topo-order", d0, "--not", `refs/heads/${home}`).text.split("\n").filter(Boolean);
 		const set = new Set<Sha>();
 		let heroTip: Sha = homePlan.tip;
-		if (work.length > 0) {
+		// A retry of a record this land already published has nothing left to replay or record.
+		if (!already && work.length > 0) {
 			const replayed = replay(hero.dir, work, homePlan.tip);
 			if ("conflict" in replayed) throw new Error(`the hero's work conflicts with ${home}, so nothing was landed: rebase ${dive.branch} onto ${home}, then land ${id} again\n${replayed.conflict}`);
 			for (const sha of replayed.made) set.add(sha);
@@ -140,15 +145,16 @@ export async function i3b8461aa9eac5f10837c2515b5231e78(args: Args, ctx: Ctx): P
 		// Home, its work on it between the jump record and the land record, the dive branch gone (loop-returns-home).
 		const cleared = new Map<string, string | undefined>([...dive.scopes.map((scope): [string, undefined] => [scope.repoId, undefined]), [hero.id!, undefined]]);
 		const doc = heroDoc(hero, id)!;
-		const made = recordOn(hero, heroTip, keyOf(hero, doc), { action: "land", label: "landed", summary: `${me} landed it`, state: "landed", meta: { diver: null }, scopes: scopesWith(hero, doc, cleared), lines: [`${me} landed it.`, "", ...notes] }, version);
+		const made = already ? { tip: marker! } : recordOn(hero, heroTip, keyOf(hero, doc), { action: "land", label: "landed", summary: `${me} landed it`, state: "landed", meta: { diver: null }, scopes: scopesWith(hero, doc, cleared), lines: [`${me} landed it.`, "", ...notes] }, version);
 		const heroSeen = diveRefs(hero.dir, id);
 		const recorded = heroRef(hero, dive.doc);
 		const lostHero = heroSeen.filter(({ sha }) => !(sha === recorded || (recorded !== undefined && runGit(hero.dir, "merge-base", "--is-ancestor", sha, recorded).ok) || runGit(hero.dir, "merge-base", "--is-ancestor", sha, d0).ok));
 		if (lostHero.length > 0) throw new Error(`nothing was landed: hero: ${lostHero.map(({ ref, sha }) => `${ref} is at ${sha.slice(0, 7)}`).join(", ")}, work this dive did not see and the landed work does not hold: jump the dive to take it in, or delete the ref by hand`);
+		if (!already) steps.push({ repo: "hero", dir: hero.dir, local: { moves: [{ ref: markerRef, old: marker ?? null, new: made.tip }] } });
 		steps.push({
 			repo: "hero",
 			dir: hero.dir,
-			remote: { name: up.remote, updates: [homeUpdate(homePlan, made.tip, [...set, made.tip]), ...heroSeen.map(({ ref, sha }): RemoteUpdate => ({ ref, old: sha, new: null, fastForward: false }))] },
+			remote: { name: up.remote, updates: [...(already ? [] : [homeUpdate(homePlan, made.tip, [...set, made.tip])]), ...heroSeen.map(({ ref, sha }): RemoteUpdate => ({ ref, old: sha, new: null, fastForward: false }))] },
 			local: {
 				moves: [
 					{ ref: `refs/heads/${home}`, old: homePlan.old, new: made.tip },
@@ -159,6 +165,8 @@ export async function i3b8461aa9eac5f10837c2515b5231e78(args: Args, ctx: Ctx): P
 				drop: [{ ref: branch, old: head0, new: null }],
 			},
 		});
+		// The marker goes only once everything else is done; it is not verified up front, since an earlier step writes it.
+		after.push({ repo: "hero", dir: hero.dir, local: { drop: [{ ref: markerRef, old: made.tip, new: null }] } });
 		carry({ steps, after }, "land");
 		return notes;
 	});

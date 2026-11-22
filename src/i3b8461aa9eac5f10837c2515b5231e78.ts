@@ -152,7 +152,7 @@ export async function i3b8461aa9eac5f10837c2515b5231e78(args: Args, ctx: Ctx): P
 		// The hero's own work, replayed onto the home as it is to be published, then stamped; a conflict is met here, before any scope is pushed.
 		const heroSrcAtPlan = runGit(hero.dir, "rev-parse", "--verify", "-q", `refs/nosedive-landed-src/${hero.id}/${id}`).text;
 		const d0 = report?.tip ?? head0;
-		const work = runGit(hero.dir, "rev-list", "--reverse", "--topo-order", head0, "--not", ...(already && heroSrcAtPlan !== "" ? [heroSrcAtPlan] : [`refs/heads/${home}`])).text.split("\n").filter(Boolean);
+		const work = runGit(hero.dir, "rev-list", "--reverse", "--topo-order", already ? head0 : d0, "--not", ...(already && heroSrcAtPlan !== "" ? [heroSrcAtPlan] : [`refs/heads/${home}`])).text.split("\n").filter(Boolean);
 		const set = new Set<Sha>();
 		let heroTip: Sha = homePlan.tip;
 		// A rerun replays the dive as it is now: what the failed run landed is already on the home, so it replays to nothing.

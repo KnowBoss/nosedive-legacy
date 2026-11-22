@@ -34,7 +34,19 @@ export async function i3b8461aa9eac5f10837c2515b5231e78(args: Args, ctx: Ctx): P
 		for (const sha of planned) set.add(sha);
 		pinned.set(dir, set);
 	};
+	// Every checkout's tip, taken once as this invocation found it: it is what the gates, the comparison with the failed run and the plan all
+	// work from, so a commit made after it is never published by this run, whatever it passes or skips.
+	const snapshot = new Map<string, string>();
+	for (const dir of [hero.dir, ...dive.scopes.filter((scope) => scope.ours).map((scope) => scope.dir)]) {
+		const head = runGit(dir, "rev-parse", "HEAD").text;
+		snapshot.set(dir, head);
+		pinned.set(dir, new Set([head]));
+	}
+	const checkTips = () => {
+		for (const dir of snapshot.keys()) pin(dir, runGit(dir, "rev-parse", "HEAD").text, []);
+	};
 	const lines = await replanning(async () => {
+		checkTips();
 		// Every refusal is found before anything is pushed, and so is every conflict.
 		const refused = readOnlyRefusals(dive);
 		if (runGit(hero.dir, "status", "--porcelain").text) refused.push("the hero has uncommitted changes: commit them first");
@@ -86,12 +98,13 @@ export async function i3b8461aa9eac5f10837c2515b5231e78(args: Args, ctx: Ctx): P
 		// Results bind to the tips tested: a retry whose tips differ runs them again.
 		// A rerun whose tips are all what the failed run published has nothing new for the gates; any other tip is gated before it is published.
 		const heroSrcNow = runGit(hero.dir, "rev-parse", "--verify", "-q", `refs/nosedive-landed-src/${hero.id}/${id}`).text;
-		const nothingNew = already && heroSrcNow !== "" && heroSrcNow === runGit(hero.dir, "rev-parse", "HEAD").text && writable.every((scope) => {
+		const nothingNew = already && heroSrcNow !== "" && heroSrcNow === snapshot.get(hero.dir) && writable.every((scope) => {
 			const published = runGit(scope.dir, "rev-parse", "--verify", "-q", `refs/nosedive-landed-scope/${hero.id}/${id}/${scope.repoId}`).text;
-			return published !== "" && published === runGit(scope.dir, "rev-parse", "HEAD").text;
+			return published !== "" && published === snapshot.get(scope.dir);
 		});
 		if (gates.length > 0 && !nothingNew && (!gated || gateRun?.tested !== tipsNow())) {
 			gated = true;
+			checkTips();
 			const tested = tipsNow();
 			const live = Object.fromEntries(dive.scopes.filter((scope) => scope.ours).map((scope) => [scope.name, { id: scope.repoId, root: relative(hero.dir, scope.dir).replace(/\\/g, "/") }]));
 			const results = await executeGates(hero, gates, { id, doc: dive.doc, featId: dive.featId, scopes: [] }, ctx, live);

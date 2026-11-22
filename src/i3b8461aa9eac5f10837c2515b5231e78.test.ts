@@ -222,3 +222,17 @@ appendFileSync(ctx.bridgeRoot + "/../seen.log", [ctx.repos.data.root, ctx.repos.
 	assert.equal(dive, id);
 	assert.equal(tree, git(f.remote, "rev-parse", "refs/heads/work/ideas^{tree}"), "the tree the gate saw is the one pushed");
 });
+
+test("results bind to the tips tested: a scope committed to while the gates ran is not landed on their word", async () => {
+	const f = fixture("land-gate-tips");
+	await jump({ ref: f.featId }, f.ctx);
+	const id = f.onDeck();
+	f.commit("idea.md", "an idea\n");
+	const dir = JSON.stringify(f.checkout);
+	const racing = gate(f, "racing", `const { execFileSync } = await import("node:child_process");\nconst { writeFileSync } = await import("node:fs");\nwriteFileSync(${JSON.stringify(join(f.checkout, "late.md"))}, "late");\nexecFileSync("git", ["add", "-A"], { cwd: ${dir} });\nexecFileSync("git", ["commit", "-q", "-m", "late"], { cwd: ${dir} });`);
+	declare(join(f.hero, "kb", `${id}.md`), racing, "rel: land.gate");
+	commitAll(f, "gate");
+	await assert.rejects(land({}, f.ctx), /changed while its gates ran, so their results do not cover what would be landed/);
+	assert.equal(f.remoteRef("refs/heads/work/ideas"), "", "nothing was pushed");
+	assert.equal(f.onDeck(), id);
+});

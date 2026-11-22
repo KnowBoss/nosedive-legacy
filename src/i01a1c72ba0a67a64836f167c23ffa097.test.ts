@@ -180,3 +180,20 @@ test("a hero wearing legacy, its dives as legacy nosedive wrote them: seeding gi
 	assert.equal(f.relOf(f.featId, id), "landed.dive");
 	assert.deepEqual(legacyEntry(readKbDoc(f.doc(id))), { [LEGACY_ID]: pin }, "land keeps it");
 });
+
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { zipSync } from "fflate";
+import { swapIgnored } from "./i01a1c72ba0a67a64836f167c23ffa097.ts";
+
+test("restoring a pack never overwrites a file the destination tracks", async () => {
+	const f = fixture("swap-tracked");
+	await jump({ ref: f.featId }, f.ctx);
+	const hero = findBridge(f.hero)!;
+	const pack = join(f.hero, ".nosedive", "local", "packs", f.featId, "data.zip");
+	mkdirSync(dirname(pack), { recursive: true });
+	writeFileSync(pack, zipSync({ "README.md": new TextEncoder().encode("from the pack\n"), "keep.local": new TextEncoder().encode("restored\n") }));
+	swapIgnored(hero, f.featId, { name: "data", dir: f.checkout });
+	assert.equal(readFileSync(join(f.checkout, "README.md"), "utf8"), "data\n", "the tracked file is the tree's");
+	assert.equal(readFileSync(join(f.checkout, "keep.local"), "utf8"), "restored\n", "an ignored entry comes back");
+});

@@ -323,6 +323,34 @@ export function fetchAll(dir: string): void {
 	if (!fetched.ok) throw new Error(`cannot fetch origin in ${dir}, so nothing was planned: ${fetched.text}`);
 }
 
+/**
+ * The `pushurl`s legacy nosedive (up to 2026.9.18) wrote into each checkout's worktree config to block pushes, by what they
+ * blocked. Its land pushed to the resolved url, past them; the loop pushes to `origin`, which they break (render-sentinels-dropped).
+ */
+export const RENDER_SENTINELS: Record<string, string> = {
+	"nosedive-render-587d3f73-2534-5179-b111-ce6c83d6814d": "land-only",
+	"nosedive-render-c4e93002-2925-58bd-9b70-d917017a9fc7": "read-only",
+};
+
+/** Removes the render sentinels from each checkout's worktree-scoped `remote.origin.pushurl`, saying one line for each checkout it changed; any other pushurl is left. */
+export function dropRenderSentinels(scopes: { name: string; dir: string }[], say: (line: string) => void): void {
+	for (const { name, dir } of scopes) {
+		if (!existsSync(dir)) continue;
+		const found = runGit(dir, "config", "--show-scope", "--get-all", "remote.origin.pushurl")
+			.text.split("\n")
+			.map((line) => line.split("\t") as [string, string | undefined])
+			.filter(([scope, value]) => scope === "worktree" && value !== undefined && value in RENDER_SENTINELS)
+			.map(([, value]) => value!);
+		const dropped = [...new Set(found)];
+		if (dropped.length === 0) continue;
+		for (const value of dropped) {
+			const unset = runGit(dir, "config", "--worktree", "--fixed-value", "--unset-all", "remote.origin.pushurl", value);
+			if (!unset.ok) throw new Error(`cannot remove legacy nosedive's ${RENDER_SENTINELS[value]} pushurl from ${name}'s worktree config: ${unset.text}`);
+		}
+		say(`${name}: removed legacy nosedive's ${dropped.map((value) => RENDER_SENTINELS[value]).join(" and ")} pushurl (${dropped.join(", ")}) from its worktree config`);
+	}
+}
+
 /** Where a dive's work is kept on each repo's origin, whichever checkout of the hero packs it. */
 export function diveRef(hero: Hero, diveId: string): string {
 	return `refs/nosedive/${hero.id}/dives/${diveId}`;

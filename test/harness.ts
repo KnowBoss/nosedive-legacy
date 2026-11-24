@@ -135,7 +135,7 @@ export function fixture(label: string) {
  * one repo, `data`, in .nosedive/repos, with a feat on it, writable unless `readOnly`: under its one root in kb, or with
  * `roots`, under a second root in ./docs. Its upstream is a bare repo, so the loop's records push.
  */
-export function loopFixture(label: string, options: { readOnly?: boolean; roots?: boolean } = {}) {
+export function loopFixture(label: string, options: { readOnly?: boolean; roots?: boolean; ownScope?: boolean } = {}) {
 	const dir = tempDir(label);
 	const remote = join(dir, "data.git");
 	git(dir, "init", "-q", "--bare", "-b", "main", remote);
@@ -147,8 +147,9 @@ export function loopFixture(label: string, options: { readOnly?: boolean; roots?
 	git(seed, "commit", "-q", "-m", "first");
 	git(seed, "push", "-q", "origin", "HEAD:refs/heads/main");
 
-	const heroRemote = join(dir, "hero.git");
-	git(dir, "init", "-q", "--bare", "-b", "main", heroRemote);
+	const heroRemote = options.ownScope ? remote : join(dir, "hero.git");
+	if (!options.ownScope) git(dir, "init", "-q", "--bare", "-b", "main", heroRemote);
+	const name = options.ownScope ? "me" : "data";
 	const hero = join(dir, "hero");
 	git(dir, "clone", "-q", heroRemote, hero);
 	identify(hero);
@@ -172,7 +173,7 @@ export function loopFixture(label: string, options: { readOnly?: boolean; roots?
 		writeFileSync(join(hero, ".nosedive", "config.yaml"), `id: ${heroId}\nworkspace: ./workspace\nroots:\n  - kb/${heroId}.md\n`);
 		writeFileSync(join(hero, "kb", `${heroId}.md`), `---\nkind: root\nid: ${heroId}\nname: hero\ngist: "A hero repo"\n${feats}---\n\n# hero\n`);
 	}
-	writeFileSync(join(hero, repos, `${repoId}.md`), `---\nkind: repo\nid: ${repoId}\nname: data\ngist: "Data"\nmeta:\n  trunk: main\n  remotes:\n    origin: ${JSON.stringify(remote)}\n---\n\n# data\n`);
+	writeFileSync(join(hero, repos, `${repoId}.md`), `---\nkind: repo\nid: ${repoId}\nname: ${name}\ngist: "Data"\nmeta:\n  trunk: main\n  remotes:\n    origin: ${JSON.stringify(remote)}\n---\n\n# ${name}\n`);
 	const scope = options.readOnly ? `  - ${repoId}\n` : `  - ${repoId}:\n      work-branch: work/ideas\n`;
 	writeFileSync(join(hero, docs, `${featId}.md`), `---\nkind: memo\nid: ${featId}\nname: ideas\ngist: "Ideas"\nscopes:\n${scope}---\n\n# Ideas\n`);
 	mkdirSync(join(hero, "workspace"));
@@ -180,6 +181,7 @@ export function loopFixture(label: string, options: { readOnly?: boolean; roots?
 	git(hero, "add", "-A");
 	git(hero, "commit", "-q", "-m", "seed");
 	git(hero, "push", "-q", "-u", "origin", "HEAD:main");
+	if (options.ownScope) git(hero, "push", "-q", "origin", "HEAD:refs/heads/work/ideas");
 
 	const out: string[] = [];
 	const err: string[] = [];
@@ -187,7 +189,7 @@ export function loopFixture(label: string, options: { readOnly?: boolean; roots?
 	const cape = (id: string, shortName: string, name: string, kinds: Record<string, unknown>, repoDir?: string) => ({ id, owner: id, shortName, name, repoDir, commit: schemaVersion, version: "test", docs: {}, index: {}, kinds });
 	const capes = [cape("01a1336b-c0b8-7cde-b7c6-285196062297", "core", "core", {}), cape("01a1b128-2c08-790f-80f4-e2c40a98bfcc", "nosedive-legacy", "data", { dive: { id: "01a1c72b-a065-7e5b-9c4f-271115cffbe5", version: schemaVersion, schema: { type: "object" } } }, seed)];
 	const ctx: Ctx = { cwd: hero, out: (text) => void out.push(text), err: (text) => void err.push(text), stdin: async () => "", capes };
-	const checkout = join(hero, "workspace", "data");
+	const checkout = join(hero, "workspace", name);
 	/** Appends a link from a doc to a dive, as `reconcileDiveFeatLinks` wrote one. */
 	const linkFrom = (from: string, to: string, rel: string, at = hero) => {
 		const path = join(at, docs, `${from}.md`);
@@ -199,6 +201,7 @@ export function loopFixture(label: string, options: { readOnly?: boolean; roots?
 	return {
 		hero,
 		heroId,
+		heroRemote,
 		remote,
 		featId,
 		repoId,

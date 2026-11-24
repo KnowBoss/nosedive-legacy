@@ -963,7 +963,7 @@ export function turnCommits(hero: Hero, dive: Doc, from: Sha, to: Sha): string[]
  * its copy at the dive's base: it is fine unchanged, or when the dive's copy begins with it (this dive's own turns already on
  * the home, as a dive in flight before turns waited for put-down has), and otherwise refused, before anything is changed.
  */
-function recordBase(hero: Hero, dive: Dive, homeTip: Sha, diveTip: Sha, command: string): { doc: KbDoc; turns: number } {
+export function recordBase(hero: Hero, dive: Dive, homeTip: Sha, diveTip: Sha, command: string): { doc: KbDoc; turns: number } {
 	const rel = keyOf(hero, dive.doc);
 	const mine = docAt(hero.dir, diveTip, rel);
 	const theirs = docAt(hero.dir, homeTip, rel);
@@ -971,9 +971,11 @@ function recordBase(hero: Hero, dive: Dive, homeTip: Sha, diveTip: Sha, command:
 	const base = runGit(hero.dir, "merge-base", diveTip, `refs/heads/${dive.home}`).text || diveTip;
 	if (theirs.text !== docAt(hero.dir, base, rel)?.text && !mine.text.startsWith(theirs.text)) {
 		const moved = runGit(hero.dir, "log", "-1", "--format=%h %s", `${base}..${homeTip}`, "--", rel).text || homeTip.slice(0, 7);
-		throw new Error(`${rel} on ${dive.home} changed since this dive began, by ${moved}, so nothing was put down and every turn is still on ${dive.branch}: revert that change on ${dive.home}, or ask whoever made it to, then run \`nosedive ${command}\` again`);
+		throw new Error(`${rel} on ${dive.home} changed since this dive began, by ${moved}, so nothing was ${command === "land" ? "landed" : "put down"} and every turn is still on ${dive.branch}: revert that change on ${dive.home}, or ask whoever made it to, then run \`nosedive ${command}\` again`);
 	}
-	return { doc: mine, turns: turnCommits(hero, dive.doc, base, diveTip).length };
+	// A gate report land left on the dive is a section of the doc too, but not a turn.
+	const report = `land(${String(dive.doc.fm.name)}): ran `;
+	return { doc: mine, turns: turnCommits(hero, dive.doc, base, diveTip).filter((sha) => !runGit(hero.dir, "log", "-1", "--format=%s", sha).text.startsWith(report)).length };
 }
 
 /** What a put-down hands its command's record: the repos put down, the ref each dive's work is kept on, its name, and how many turns the dive recorded. */

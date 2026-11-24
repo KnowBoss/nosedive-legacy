@@ -496,6 +496,41 @@ test("land finishes the cleanup of a landed record it published, when a hero ref
 	assert.equal(git(heroRemote, "rev-list", "--count", "refs/heads/main", "--grep=^land("), "1", "no second record");
 });
 
+test("a land rerun replays the turns written after the failed run, and the home's record keeps the ones it had", async () => {
+	const f = fixture("land-rerun-turns");
+	await jump({ ref: f.featId }, f.ctx);
+	const t = await turner(f);
+	f.commit("idea.md", "an idea\n");
+	const heroRemote = git(f.hero, "remote", "get-url", "origin");
+	const legacy = `refs/nosedive/dives/${f.heroId}/main/${t.id}`;
+	git(f.hero, "push", "-q", "origin", `HEAD:${legacy}`);
+	const hook = rejectDelete(heroRemote, legacy);
+	await t.turn("One.", "First");
+	await assert.rejects(land({}, t.plain), /injected deletion failure/);
+	assert.equal(sections(git(heroRemote, "show", `refs/heads/main:kb/${t.id}.md`), "First"), 1, "the failed run's record holds the first turn");
+	assert.equal(sections(git(heroRemote, "show", `refs/heads/main:kb/${t.id}.md`), "Second"), 0);
+
+	await t.turn("Two.", "Second");
+	writeFileSync(join(f.hero, "late-hero.md"), "hero work after the failure\n");
+	git(f.hero, "add", "-A");
+	git(f.hero, "commit", "-q", "-m", "late hero work");
+	unlinkSync(hook);
+	f.out.length = 0;
+	await land({}, t.plain);
+
+	const doc = git(heroRemote, "show", `refs/heads/main:kb/${t.id}.md`);
+	assert.equal(sections(doc, "First"), 1);
+	assert.equal(sections(doc, "Second"), 1, "the turn written after the failed run is not lost");
+	assert.equal(sections(doc, "landed"), 1, "no second record");
+	assert.ok(doc.indexOf("One.") < doc.indexOf("landed it.") && doc.indexOf("landed it.") < doc.indexOf("Two."));
+	assert.equal(git(heroRemote, "show", "refs/heads/main:late-hero.md"), "hero work after the failure");
+	assert.match(f.out.join("\n"), /- turns written after the failed land: 1/);
+	assert.equal(git(f.hero, "rev-parse", "main"), git(heroRemote, "rev-parse", "refs/heads/main"));
+	assert.equal(f.doc(t.id), doc + "\n");
+	assert.equal(git(heroRemote, "for-each-ref", legacy), "", "the cleanup finished");
+	assert.throws(() => f.onDeck(), "the dive is over");
+});
+
 test("a retry refuses a dive someone else landed, whatever marker this checkout holds", async () => {
 	const f = fixture("land-someone-else");
 	await jump({ ref: f.featId }, f.ctx);

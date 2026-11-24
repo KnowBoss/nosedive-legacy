@@ -6,7 +6,7 @@ import { coAuthor, commitOffside, docAt, fetchExact, replay, stampRange } from "
 import type { LocalStep, RemoteUpdate, Sha, Step } from "nosedive-core";
 import { executeGates, heroDocs, linksOf, scriptOf, type GateResult, type Selected } from "./i01a1b131e31f7b329bc1c4389343491a.ts";
 import { reachedFeats } from "./iffb5aa30b4e659e68b40ad7dee378a62.ts";
-import { i01a1c72ba0a67a64836f167c23ffa097 as diveOnDeck, type Dive, assertHeld, carry, diveRefs, dropRenderSentinels, heroRef, durableFeat, emailOf, fetchHome, heroDoc, homeUpdate, homeUpstream, keyOf, localDiveRefs, packIgnored, planHome, readOnlyRefusals, recordOn, replanning, scopesWith } from "./i01a1c72ba0a67a64836f167c23ffa097.ts";
+import { i01a1c72ba0a67a64836f167c23ffa097 as diveOnDeck, type Dive, assertHeld, carry, diveRefs, dropRenderSentinels, heroRef, durableFeat, emailOf, fetchHome, heroDoc, homeUpdate, homeUpstream, keyOf, localDiveRefs, packIgnored, planHome, readOnlyRefusals, recordBase, recordOn, replanning, scopesWith, turnCommits } from "./i01a1c72ba0a67a64836f167c23ffa097.ts";
 import { sectionChange } from "./i01a1c72ba0b57a0c80e3fdd641d001a8.ts";
 import { i01a1c72ba0c37d27a058e908481307c3 as runGit } from "./i01a1c72ba0c37d27a058e908481307c3.ts";
 
@@ -99,6 +99,8 @@ export async function i3b8461aa9eac5f10837c2515b5231e78(args: Args, ctx: Ctx): P
 		// The record this land wrote down is on the published home, though others may have pushed on top of it.
 		const already = marker !== undefined && runGit(hero.dir, "merge-base", "--is-ancestor", marker, homePlan.upstream).ok;
 		assertHeld(hero, dive, homePlan.tip, already ? homePlan.tip : undefined);
+		// The record goes on the dive branch's copy of the dive doc, which holds every turn; a rerun's record is on the home already.
+		const guarded = already ? undefined : recordBase(hero, dive, homePlan.tip, heroStart, "land");
 
 		// Gates see the checkouts as they are about to be pushed, and one blocking failure pushes nothing; they run once, whatever is planned again.
 		// Results bind to the tips tested: a retry whose tips differ runs them again.
@@ -171,7 +173,13 @@ export async function i3b8461aa9eac5f10837c2515b5231e78(args: Args, ctx: Ctx): P
 		// The hero's own work, replayed onto the home as it is to be published, then stamped; a conflict is met here, before any scope is pushed.
 		const heroSrcAtPlan = runGit(hero.dir, "rev-parse", "--verify", "-q", `refs/nosedive-landed-src/${hero.id}/${id}`).text;
 		const d0 = report?.tip ?? head0;
-		const work = runGit(hero.dir, "rev-list", "--reverse", "--topo-order", already ? head0 : d0, "--not", ...(already && heroSrcAtPlan !== "" ? [heroSrcAtPlan] : [`refs/heads/${home}`])).text.split("\n").filter(Boolean);
+		const since = already && heroSrcAtPlan !== "" ? heroSrcAtPlan : `refs/heads/${home}`;
+		const tipNow = already ? head0 : d0;
+		// Turns are left out of the replay: the record holds them (turns-publish-when).
+		const turns = new Set(turnCommits(hero, dive.doc, since, tipNow));
+		const work = runGit(hero.dir, "rev-list", "--reverse", "--topo-order", tipNow, "--not", since).text.split("\n").filter((sha) => sha && !turns.has(sha));
+		// The gate report this run made is on the branch now, so the record is built on the branch as it is.
+		const onBranch = already ? undefined : d0 === heroStart ? guarded : recordBase(hero, dive, homePlan.tip, d0, "land");
 		const set = new Set<Sha>();
 		let heroTip: Sha = homePlan.tip;
 		// A rerun replays the dive as it is now: what the failed run landed is already on the home, so it replays to nothing.
@@ -186,17 +194,40 @@ export async function i3b8461aa9eac5f10837c2515b5231e78(args: Args, ctx: Ctx): P
 			if (count !== "0") notes.push(`- hero: ${count} commit${count === "1" ? "" : "s"} onto ${home}`);
 		}
 
+		const rel = keyOf(hero, dive.doc);
+		if (onBranch && onBranch.turns > 0) notes.push(`- turns: ${onBranch.turns}`);
+		// A rerun's record is on the home: the turns written after the failed run are appended to its copy of the dive doc.
+		if (already) {
+			let text = docAt(hero.dir, heroTip, rel)?.text;
+			let appended = 0;
+			for (const sha of turns) {
+				const turned = docAt(hero.dir, sha, rel)?.text;
+				const before = docAt(hero.dir, `${sha}^`, rel)?.text.trimEnd();
+				if (text === undefined || turned === undefined || before === undefined || !turned.startsWith(before)) continue;
+				const piece = turned.slice(before.length);
+				if (text.includes(piece.trim())) continue;
+				text = `${text.trimEnd()}${piece}`;
+				appended++;
+			}
+			if (appended > 0 && text !== undefined) {
+				const late = commitOffside(hero.dir, heroTip, { [rel]: text }, `land(${String(dive.doc.fm.name)}): turns written after the failed land`, version);
+				for (const sha of late.made) set.add(sha);
+				heroTip = late.tip;
+				notes.push(`- turns written after the failed land: ${appended}`);
+			}
+		}
+
 		// Home, its work on it between the jump record and the land record, the dive branch gone (loop-returns-home).
 		const cleared = new Map<string, string | undefined>([...dive.scopes.map((scope): [string, undefined] => [scope.repoId, undefined]), [hero.id!, undefined]]);
 		const doc = heroDoc(hero, id)!;
-		const made = already ? { tip: heroTip } : recordOn(hero, heroTip, keyOf(hero, doc), { action: "land", label: "landed", summary: `${me} landed it`, state: "landed", meta: { diver: null }, scopes: scopesWith(hero, doc, cleared), lines: [`${me} landed it.`, "", ...notes] }, version);
+		const made = already ? { tip: heroTip } : recordOn(hero, heroTip, rel, { action: "land", label: "landed", summary: `${me} landed it`, state: "landed", meta: { diver: null }, scopes: scopesWith(hero, doc, cleared), lines: [`${me} landed it.`, "", ...notes] }, version, { base: onBranch!.doc });
 		const heroSeen = diveRefs(hero.dir, id);
 		const recorded = heroRef(hero, dive.doc);
 		// What the dive branch held when this land first ran; in recovery the dive's refs are judged against it, not against what the branch holds now.
 		const heroSrcRef = `refs/nosedive-landed-src/${hero.id}/${id}`;
 		const heroSrc = runGit(hero.dir, "rev-parse", "--verify", "-q", heroSrcRef).text;
 		pin(hero.dir, head0, []);
-		if (heroSrc !== "") later.push(...runGit(hero.dir, "log", "--reverse", "--format=%h %s", `${heroSrc}..${head0}`).text.split("\n").filter(Boolean).map((line) => `  hero: ${line}`));
+		if (heroSrc !== "") later.push(...runGit(hero.dir, "log", "--reverse", "--format=%H %h %s", `${heroSrc}..${head0}`).text.split("\n").filter((line) => line && !turns.has(line.split(" ")[0]!)).map((line) => `  hero: ${line.slice(line.indexOf(" ") + 1)}`));
 		const lostHero = heroSeen.filter(({ sha }) => !(sha === recorded || (recorded !== undefined && runGit(hero.dir, "merge-base", "--is-ancestor", sha, recorded).ok) || runGit(hero.dir, "merge-base", "--is-ancestor", sha, d0).ok || (heroSrc !== "" && runGit(hero.dir, "merge-base", "--is-ancestor", sha, heroSrc).ok)));
 		if (lostHero.length > 0) throw new Error(`nothing was landed: hero: ${lostHero.map(({ ref, sha }) => `${ref} is at ${sha.slice(0, 7)}`).join(", ")}, work this dive did not see and the landed work does not hold: jump the dive to take it in, or delete the ref by hand`);
 		if (!already) steps.push({ repo: "hero", dir: hero.dir, local: { moves: [{ ref: markerRef, old: marker ?? null, new: made.tip }, { ref: heroSrcRef, old: heroSrc || null, new: heroSrc || head0 }] } });

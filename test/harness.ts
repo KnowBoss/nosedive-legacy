@@ -278,3 +278,42 @@ export function declareDiveKind(f: { ctx: Ctx; schemaVersion: string }): void {
 	const cape = f.ctx.capes.find((each) => each.shortName === "nosedive-legacy")!;
 	cape.kinds.dive = { ...(doc.fm.meta as object), id: doc.fm.id, links: doc.fm.links, version: f.schemaVersion, ...(dropWhen === undefined ? {} : { dropWhen }) };
 }
+
+const TURN = "01a1c72b-a0d2-7947-83de-8f2dd490283a";
+const DIVE_SHAPE = "01a1c72b-a0f0-7508-a398-7c47eef04568";
+
+/** Runs the real turn gate through the launcher on a jumped loop fixture; `plain` is the ctx for the loop's own actions (pack, land, bail). */
+export async function turner(f: ReturnType<typeof loopFixture>) {
+	const core = await import("nosedive-core");
+	const { i01a1c72ba0d2794783de8f2dd490283a: turn } = await import("../src/i01a1c72ba0d2794783de8f2dd490283a.ts");
+	const { i01a1c72ba0f07508a3987c47eef04568: diveShape } = await import("../src/i01a1c72ba0f07508a3987c47eef04568.ts");
+	const { dirname } = await import("node:path");
+	const { fileURLToPath } = await import("node:url");
+	const source = core.i01a1335487e477549d84a6fc2c901bf6(dirname(dirname(fileURLToPath(import.meta.url))));
+	const plain = { ...f.ctx };
+	const legacy = f.ctx.capes[1]!;
+	const declared = source.kinds.dive as Record<string, unknown>;
+	const ns = core.i01a1335480147d0686528aee80f8ee34;
+	const cape = { ...legacy, docs: source.docs, index: { [ns(TURN, legacy.id)]: turn, [ns(DIVE_SHAPE, legacy.id)]: diveShape }, kinds: { ...legacy.kinds, dive: { ...(legacy.kinds.dive as Record<string, unknown>), links: declared.links } } };
+	const turning: Ctx = { ...f.ctx, capes: [core as unknown as Cape, cape as unknown as Cape] };
+	const id = f.onDeck();
+	return {
+		plain,
+		id,
+		/** One turn on the dive branch, under its own heading label; returns the commit. */
+		async turn(summary: string, label: string): Promise<string> {
+			const code = await core.i01a1336a958f71c7beec4db3195c7966(["pass", "--turn", id, summary, "--label", label], turning);
+			if (code !== 0) throw new Error(`pass --turn failed: ${f.err.join("\n")}`);
+			return git(f.hero, "rev-parse", "HEAD");
+		},
+	};
+}
+
+/** Pushes to the hero's origin main as another checkout would: `edit` works in a scratch clone of it, which is pushed after. */
+export function onOrigin(f: ReturnType<typeof loopFixture>, edit: (clone: string) => void): void {
+	const clone = join(tempDir("origin-clone"), "clone");
+	git(f.hero, "clone", "-q", git(f.hero, "remote", "get-url", "origin"), clone);
+	identify(clone);
+	edit(clone);
+	git(clone, "push", "-q", "origin", "HEAD:main");
+}

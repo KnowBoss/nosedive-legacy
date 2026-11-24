@@ -12,8 +12,8 @@ export async function ia159fdc01ac85e4f831dc1c523787ce6(args: Args, ctx: Ctx): P
 	// Before any push is planned: a checkout legacy nosedive left can block every push to origin (render-sentinels-dropped).
 	dropRenderSentinels(dive.scopes.filter((scope) => scope.ours), ctx.err);
 
-	await putDown(dive, ctx.capes[0]!.version, "bail", ({ puts, refs, own }) => {
-		const lines = [`${me} bailed: ${reason}`, "", ...puts.map((put) => `- ${put.name}: ${put.sha ? `held ${[...put.commits].reverse().join("; ")}, kept on ${own}` : "held no commits"}`)];
+	await putDown(dive, ctx.capes[0]!.version, "bail", ({ puts, refs, own, turns }) => {
+		const lines = [`${me} bailed: ${reason}`, "", ...puts.map((put) => `- ${put.name}: ${put.sha ? `held ${[...put.commits].reverse().join("; ")}, kept on ${own}` : "held no commits"}`), ...(turns > 0 ? [`- turns: ${turns}`] : [])];
 		return { action: "bail", label: "bailed", state: "bailed", summary: reason, meta: { diver: null }, scopes: scopesWith(hero, dive.doc, refs), lines };
 	});
 	ctx.out(`bailed ${String(dive.doc.fm.name)}`);

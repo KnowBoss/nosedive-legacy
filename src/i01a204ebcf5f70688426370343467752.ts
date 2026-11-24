@@ -89,7 +89,7 @@ export function ownScopes(hero: Hero, doc: Doc): string[] {
 }
 
 /** Refuses a feat or dive with such a scope, before anything is written. */
-export function refuseOwnScopes(hero: Hero, doc: Doc): void {
+export function i01a204ebcf5f70688426370343467752(hero: Hero, doc: Doc): void {
 	const refused = ownScopes(hero, doc);
 	if (refused.length > 0) throw new Error(`nothing was changed:\n  ${refused.join("\n  ")}`);
 }

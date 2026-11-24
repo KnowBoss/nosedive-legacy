@@ -15,7 +15,7 @@ import { i01a18e2a3b4b798d98068d4778a158e6 as docKind } from "nosedive-core";
 import { pinOf } from "nosedive-core";
 import { LEGACY_ID, Stale, carry, describeDive, dropRenderSentinels, diveBranch, diveBranches, diveLinks, emailOf, featIdOf, fetchAll, fetchHome, heroBranch, heroDoc, homeOf, homeUpdate, homeUpstream, isDive as isLegacyDive, isDiveRef, isOver, isWip, keepOrphans, keyOf, metaOf, openDives, parseDiveBranch, patchWarnings, planHome, readScopes, recordOn, replanning, repoDoc, resolveUpstream, scopesWith, stateLinksOf, swapIgnored, tokenOf, trunkOf, type HomePlan, type Hung, type ScopeEntry, type State } from "./i01a1c72ba0a67a64836f167c23ffa097.ts";
 import type { Doc, Hero } from "./i01a1c72ba0b57a0c80e3fdd641d001a8.ts";
-import { refuseOwnScopes } from "./i01a204ebcf5f70688426370343467752.ts";
+import { i01a204ebcf5f70688426370343467752 as refuseOwnScopes } from "./i01a204ebcf5f70688426370343467752.ts";
 import { i01a1c72ba0c37d27a058e908481307c3 as runGit } from "./i01a1c72ba0c37d27a058e908481307c3.ts";
 
 type Planned = ScopeEntry & { repo: Doc; name: string; dir: string; shown: string; local?: string; settled: boolean };

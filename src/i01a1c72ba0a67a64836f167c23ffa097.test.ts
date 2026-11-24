@@ -1,16 +1,18 @@
 // dive-on-deck
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { test } from "node:test";
 import { i01a1335485c67c95b7efdf2f0e03cfd6 as findBridge } from "nosedive-core";
 import { digestOf, featNameOf, type KindMeta } from "nosedive-core";
-import { i01a1c72ba0a67a64836f167c23ffa097 as diveOnDeck, LEGACY_ID, diveBranch, diveLinks, diverOf, featIdOf, heroDoc, isDive, isWip, moveLinks, openDives, parseDiveBranch, tokenOf, wip, readScopes, scopesWith } from "./i01a1c72ba0a67a64836f167c23ffa097.ts";
+import { i01a1c72ba0a67a64836f167c23ffa097 as diveOnDeck, LEGACY_ID, RENDER_SENTINELS, diveBranch, dropRenderSentinels, diveLinks, diverOf, featIdOf, heroDoc, isDive, isWip, moveLinks, openDives, parseDiveBranch, tokenOf, wip, readScopes, scopesWith } from "./i01a1c72ba0a67a64836f167c23ffa097.ts";
 import { i0e2024913efd5dc8afe194f5650bda20 as jump } from "./i0e2024913efd5dc8afe194f5650bda20.ts";
 import { i01a1335482f876d6808aec457f512e80 as readKbDoc } from "nosedive-core";
 import { i01a18e8044c97daeb0498ee7ad07bf43 as canonicalKinds } from "nosedive-core";
 import { i01a19eb470547ce5935e03ab6c97a715 as listNext } from "nosedive-core";
 import { i5f74ee87748f528b9fd9b00a48c2275b as pack } from "./i5f74ee87748f528b9fd9b00a48c2275b.ts";
 import { i3b8461aa9eac5f10837c2515b5231e78 as land } from "./i3b8461aa9eac5f10837c2515b5231e78.ts";
-import { declareDiveKind, loopFixture as fixture, git } from "../test/harness.ts";
+import { ia159fdc01ac85e4f831dc1c523787ce6 as bail } from "./ia159fdc01ac85e4f831dc1c523787ce6.ts";
+import { declareDiveKind, loopFixture as fixture, git, tempDir } from "../test/harness.ts";
 
 test("refuses off a dive branch, then gives the dive the hero's branch names, its home, its feat and each scope, and refuses any other", async () => {
 	const f = fixture("dive-on-deck");
@@ -252,4 +254,74 @@ test("orphan cleanup archives the staged bytes and preserves a replacement at th
 	assert.equal(new TextDecoder().decode(staged["ignored.local"]), "ignored before\n");
 	rmSync(staging, { recursive: true });
 	assert.equal(readFileSync(path, "utf8"), "new work\n");
+});
+
+const LAND_ONLY = "nosedive-render-587d3f73-2534-5179-b111-ce6c83d6814d";
+const READ_ONLY = "nosedive-render-c4e93002-2925-58bd-9b70-d917017a9fc7";
+
+/** A checkout as legacy nosedive left it: worktree config on, the checkout marked non-bare there, and `pushurl` written there. */
+function blockPush(dir: string, pushurl: string): void {
+	git(dir, "config", "extensions.worktreeConfig", "true");
+	git(dir, "config", "--worktree", "core.bare", "false");
+	git(dir, "config", "--worktree", "--replace-all", "remote.origin.pushurl", pushurl);
+}
+
+const pushurls = (dir: string) => spawnSync("git", ["config", "--show-scope", "--get-all", "remote.origin.pushurl"], { cwd: dir, encoding: "utf8" }).stdout.trim();
+
+test("drops each render sentinel legacy nosedive wrote to a checkout's worktree config, saying one line, and leaves any other pushurl", () => {
+	assert.deepEqual(Object.values(RENDER_SENTINELS).sort(), ["land-only", "read-only"]);
+	const make = (label: string, pushurl: string) => {
+		const dir = tempDir(label);
+		git(dir, "init", "-q", "-b", "main");
+		git(dir, "remote", "add", "origin", "https://example.com/data.git");
+		blockPush(dir, pushurl);
+		return dir;
+	};
+	for (const [sentinel, what] of [[LAND_ONLY, "land-only"], [READ_ONLY, "read-only"]] as const) {
+		const dir = make(what, sentinel);
+		const said: string[] = [];
+		dropRenderSentinels([{ name: "data", dir }], (line) => void said.push(line));
+		assert.deepEqual(said, [`data: removed legacy nosedive's ${what} pushurl (${sentinel}) from its worktree config`]);
+		assert.equal(pushurls(dir), "", "the sentinel is gone");
+		assert.equal(git(dir, "config", "--worktree", "--get", "core.bare"), "false", "the rest of the worktree config is kept");
+		dropRenderSentinels([{ name: "data", dir }], (line) => void said.push(line));
+		assert.equal(said.length, 1, "a checkout with none says nothing");
+	}
+
+	const own = make("own", "git@example.com:mine/data.git");
+	git(own, "config", "remote.origin.pushurl", LAND_ONLY);
+	const said: string[] = [];
+	dropRenderSentinels([{ name: "data", dir: own }, { name: "gone", dir: join(own, "missing") }], (line) => void said.push(line));
+	assert.deepEqual(said, [], "another pushurl, and a sentinel outside worktree config, are left");
+	assert.equal(pushurls(own), `local\t${LAND_ONLY}\nworktree\tgit@example.com:mine/data.git`);
+});
+
+test("jump, pack, bail and land drop a render sentinel from a scope's checkout before they push, so a checkout legacy nosedive left still lands", async () => {
+	const f = fixture("render-sentinels");
+	await jump({ ref: f.featId }, f.ctx);
+	const id = f.onDeck();
+	const committed = f.commit("idea.md", "an idea\n");
+	blockPush(f.checkout, LAND_ONLY);
+	await pack({}, f.ctx);
+	assert.ok(f.err.includes(`data: removed legacy nosedive's land-only pushurl (${LAND_ONLY}) from its worktree config`));
+	assert.equal(f.remoteRef(`refs/nosedive/${f.heroId}/dives/${id}`), committed, "pack pushed the work to origin");
+
+	// A reused checkout: jump drops it, though nothing would push until land.
+	blockPush(f.checkout, READ_ONLY);
+	await jump({ ref: id }, f.ctx);
+	assert.ok(f.err.includes(`data: removed legacy nosedive's read-only pushurl (${READ_ONLY}) from its worktree config`));
+	assert.equal(pushurls(f.checkout), "");
+
+	blockPush(f.checkout, LAND_ONLY);
+	await land({}, f.ctx);
+	assert.equal(pushurls(f.checkout), "");
+	assert.equal(f.remoteRef("refs/heads/work/ideas"), git(f.checkout, "rev-parse", "HEAD"), "land pushed the work branch");
+
+	const g = fixture("render-sentinels-bail");
+	await jump({ ref: g.featId }, g.ctx);
+	g.commit("idea.md", "an idea\n");
+	blockPush(g.checkout, READ_ONLY);
+	await bail({ reason: "a test" }, g.ctx);
+	assert.equal(pushurls(g.checkout), "");
+	assert.ok(g.err.includes(`data: removed legacy nosedive's read-only pushurl (${READ_ONLY}) from its worktree config`));
 });

@@ -13,7 +13,7 @@ import { i01a13c760de87562b4738946402010b8 as checkoutPath } from "nosedive-core
 import { i01a147171f057d019118aaa1f269f5fd as findKind } from "nosedive-core";
 import { i01a18e2a3b4b798d98068d4778a158e6 as docKind } from "nosedive-core";
 import { pinOf } from "nosedive-core";
-import { LEGACY_ID, Stale, carry, describeDive, diveBranch, diveBranches, diveLinks, emailOf, featIdOf, fetchAll, fetchHome, heroBranch, heroDoc, homeOf, homeUpdate, homeUpstream, isDive as isLegacyDive, isDiveRef, isOver, isWip, keepOrphans, keyOf, metaOf, openDives, parseDiveBranch, patchWarnings, planHome, readScopes, recordOn, replanning, repoDoc, resolveUpstream, scopesWith, stateLinksOf, swapIgnored, tokenOf, trunkOf, type HomePlan, type Hung, type ScopeEntry, type State } from "./i01a1c72ba0a67a64836f167c23ffa097.ts";
+import { LEGACY_ID, Stale, carry, describeDive, dropRenderSentinels, diveBranch, diveBranches, diveLinks, emailOf, featIdOf, fetchAll, fetchHome, heroBranch, heroDoc, homeOf, homeUpdate, homeUpstream, isDive as isLegacyDive, isDiveRef, isOver, isWip, keepOrphans, keyOf, metaOf, openDives, parseDiveBranch, patchWarnings, planHome, readScopes, recordOn, replanning, repoDoc, resolveUpstream, scopesWith, stateLinksOf, swapIgnored, tokenOf, trunkOf, type HomePlan, type Hung, type ScopeEntry, type State } from "./i01a1c72ba0a67a64836f167c23ffa097.ts";
 import type { Doc, Hero } from "./i01a1c72ba0b57a0c80e3fdd641d001a8.ts";
 import { i01a1c72ba0c37d27a058e908481307c3 as runGit } from "./i01a1c72ba0c37d27a058e908481307c3.ts";
 
@@ -188,6 +188,8 @@ async function jumpPlanned({ ctx, hero, me, target, home, token, mode, homePlan,
 	});
 	const refused = plan.filter((scope) => existsSync(scope.dir) && !scope.settled && runGit(scope.dir, "status", "--porcelain").text).map((scope) => `${scope.shown} has uncommitted changes or untracked files`);
 	if (refused.length > 0) throw new Error(`jump would lose work, so nothing moved:\n  ${refused.join("\n  ")}`);
+	// A checkout legacy nosedive left can block every push to origin; it is the dive's checkout now (render-sentinels-dropped).
+	dropRenderSentinels(plan, ctx.err);
 
 	const at = isDive ? undefined : featRoot(hero, String(target.fm.id));
 	if (!isDive) diveKind(hero, ctx); // Refuse an unpublished schema before moving any checkout.
@@ -213,6 +215,7 @@ async function jumpPlanned({ ctx, hero, me, target, home, token, mode, homePlan,
 			// Hydrated detached, then put on the dive branch, which hydrate-repo would name after the hero's branch; where it
 			// ends up is said in the record, so hydrate-repo's own line, naming the detached start, is not shown.
 			hydrateRepo(hero, scope.repo, { out: () => undefined, err: ctx.err });
+			dropRenderSentinels([scope], ctx.err);
 		}
 		fetchAll(scope.dir);
 		const here = runGit(scope.dir, "rev-parse", "HEAD").text;

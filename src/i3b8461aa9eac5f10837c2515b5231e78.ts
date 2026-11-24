@@ -6,7 +6,7 @@ import { coAuthor, commitOffside, docAt, fetchExact, replay, stampRange } from "
 import type { LocalStep, RemoteUpdate, Sha, Step } from "nosedive-core";
 import { executeGates, heroDocs, linksOf, scriptOf, type GateResult, type Selected } from "./i01a1b131e31f7b329bc1c4389343491a.ts";
 import { reachedFeats } from "./iffb5aa30b4e659e68b40ad7dee378a62.ts";
-import { refuseOwnScopes } from "./dive-origin.ts";
+import { refuseOwnScopes } from "./i01a204ebcf5f70688426370343467752.ts";
 import { i01a1c72ba0a67a64836f167c23ffa097 as diveOnDeck, type Dive, assertHeld, carry, diveRefs, dropRenderSentinels, heroRef, durableFeat, emailOf, fetchHome, heroDoc, homeUpdate, homeUpstream, keyOf, localDiveRefs, packIgnored, planHome, readOnlyRefusals, recordOn, replanning, scopesWith } from "./i01a1c72ba0a67a64836f167c23ffa097.ts";
 import { sectionChange } from "./i01a1c72ba0b57a0c80e3fdd641d001a8.ts";
 import { i01a1c72ba0c37d27a058e908481307c3 as runGit } from "./i01a1c72ba0c37d27a058e908481307c3.ts";

@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import type { GateCtx } from "nosedive-core";
 import { i01a1335482f876d6808aec457f512e80 as readKbDoc } from "nosedive-core";
-import { i01a1c72ba0a67a64836f167c23ffa097 as diveOnDeck } from "./i01a1c72ba0a67a64836f167c23ffa097.ts";
+import { i01a1c72ba0a67a64836f167c23ffa097 as diveOnDeck, backUp } from "./i01a1c72ba0a67a64836f167c23ffa097.ts";
 
 export async function i01a1c72ba0e174878930a64e361790a6(ctx: GateCtx): Promise<void> {
 	diveOnDeck(ctx.bridge, ctx, ctx.doc.id);
@@ -23,8 +23,19 @@ export async function i01a1c72ba0e174878930a64e361790a6(ctx: GateCtx): Promise<v
 	ctx.doc.body = `${current.body.replace(/\n*$/, "\n")}\n## ${heading}\n\n${lines.join("\n")}\n`;
 	ctx.edit.change(ctx.doc);
 
-	// Turns stay on the dive branch; land, pack and bail publish them in their record (turns-publish-when). Said once pass has committed.
-	const say = (sha?: string) => ctx.out(`turn: ${sha ? `${sha.slice(0, 7)} ` : ""}committed on the dive branch only, not pushed; land, pack or bail publishes it`);
-	if (!ctx.committed) return say();
-	ctx.committed((commits) => say(commits.find((each) => resolve(each.repoDir).toLowerCase() === resolve(ctx.bridge.dir).toLowerCase())?.sha));
+	// The turn goes to the dive's ref, never to the home, which land, pack and bail publish it to in their record (turns-publish-when, turns-pushed-where). Said once pass has committed.
+	if (!ctx.committed) return ctx.out("turn: committed on the dive branch, not pushed: this core gives gates no commit hook; pack or land pushes it");
+	ctx.committed((commits) => {
+		const sha = commits.find((each) => resolve(each.repoDir).toLowerCase() === resolve(ctx.bridge.dir).toLowerCase())?.sha;
+		let done: ReturnType<typeof backUp>;
+		try {
+			done = backUp(diveOnDeck(ctx.bridge, ctx, ctx.doc.id));
+		} catch (error) {
+			// The turn is committed whatever the push met: a failure here is no failed turn.
+			done = { pushed: [], refused: [{ name: "hero", why: (error as Error).message }], uncommitted: [] };
+		}
+		ctx.out(`turn: ${sha ? `${sha.slice(0, 7)} ` : ""}committed on the dive branch${done.pushed.length > 0 ? ` and pushed to its dive ref in ${done.pushed.join(", ")}` : ", not pushed"}; the home gets it only when land, pack or bail puts the dive down`);
+		for (const { name, why } of done.refused) ctx.err(`warning: ${name} was not pushed to its dive ref (${why}); its committed work stays on the dive branch, and a later turn, pack or land pushes it`);
+		if (done.uncommitted.length > 0) ctx.err(`warning: uncommitted changes in ${done.uncommitted.join(", ")} are not backed up: a turn pushes only what is committed`);
+	});
 }

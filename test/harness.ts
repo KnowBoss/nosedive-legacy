@@ -1,13 +1,14 @@
 import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { after } from "node:test";
 import type { Cape, Ctx } from "nosedive-core";
 import { i01a1335480c776ba8945020d0af333eb as mintUuid } from "nosedive-core";
+import { i01a1335485c67c95b7efdf2f0e03cfd6 as findBridge } from "nosedive-core";
 import { i01a1335482f876d6808aec457f512e80 as readKbDoc } from "nosedive-core";
 import { i01a1335483aa776cb84df698b04adc06 as writeKbDoc } from "nosedive-core";
-import { parseDiveBranch } from "../src/i01a1c72ba0a67a64836f167c23ffa097.ts";
+import { diveRef, parseDiveBranch, tokenOf } from "../src/i01a1c72ba0a67a64836f167c23ffa097.ts";
 
 const root = mkdtempSync(join(tmpdir(), "nosedive-legacy-"));
 after(() => rmSync(root, { recursive: true, force: true }));
@@ -208,6 +209,10 @@ export function loopFixture(label: string, options: { readOnly?: boolean; roots?
 		schemaRepo: seed,
 		out,
 		err,
+		/** Where a dive's work is kept on an origin when this checkout holds it: under the token of the hero's home, main. */
+		diveRef(id: string, cwd = hero): string {
+			return diveRef(tokenOf(findBridge(cwd)!, "main"), id);
+		},
 		/** The id of the dive on deck: the one the hero's dive branch names. */
 		onDeck(cwd = hero): string {
 			const parsed = parseDiveBranch(git(cwd, "symbolic-ref", "--short", "HEAD"));
@@ -307,6 +312,20 @@ export async function turner(f: ReturnType<typeof loopFixture>) {
 			return git(f.hero, "rev-parse", "HEAD");
 		},
 	};
+}
+
+/**
+ * Moves the hero's origin main inside a put-down's window: `edit` makes its commit in a scratch clone now, and the data origin's
+ * post-receive hook pushes it, once, when the put-down first pushes there, which is after its earlier pushes and before its home push.
+ */
+export function moveHomeWhenScopePushed(f: ReturnType<typeof loopFixture>, edit: (clone: string) => void): void {
+	const clone = join(tempDir("window-clone"), "clone");
+	git(f.hero, "clone", "-q", git(f.hero, "remote", "get-url", "origin"), clone);
+	identify(clone);
+	edit(clone);
+	const guard = join(dirname(clone), "fired").replace(/\\/g, "/");
+	const path = clone.replace(/\\/g, "/");
+	writeFileSync(join(f.remote, "hooks", "post-receive"), `#!/bin/sh\n[ -e "${guard}" ] && exit 0\n: > "${guard}"\nunset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE\ncd "${path}" && git push -q origin HEAD:main\nexit 0\n`, { mode: 0o755 });
 }
 
 /** Pushes to the hero's origin main as another checkout would: `edit` works in a scratch clone of it, which is pushed after. */

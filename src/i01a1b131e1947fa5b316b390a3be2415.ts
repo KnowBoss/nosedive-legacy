@@ -2,10 +2,9 @@ import type { Bridge, KbDoc } from "nosedive-core";
 import { i01a138b2b8ee703cab227b010f588b6a as locateKbDoc } from "nosedive-core";
 import { i01a18e2a3b4b798d98068d4778a158e6 as docKind } from "nosedive-core";
 import { git, repoDocs } from "./i01a1b131e0177e7f8518b309634ebbd8.ts";
-import { diveLinks, featIdOf, isDive as isLegacyDive, isOver } from "./i01a1c72ba0a67a64836f167c23ffa097.ts";
+import { diveLinks, featIdOf, isDive as isLegacyDive, isOver, WORK_ID } from "./i01a1c72ba0a67a64836f167c23ffa097.ts";
 
-/** Work's seeded id, which owns work's dive kind. */
-export const WORK_ID = "01a15bb1-da9e-7d2d-aa82-5ee97257adc6";
+export { WORK_ID };
 
 type Doc = KbDoc & { path: string };
 export type Scope = { repoId: string; ref?: string };

@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { i0e2024913efd5dc8afe194f5650bda20 as jump } from "./i0e2024913efd5dc8afe194f5650bda20.ts";
 import { ia159fdc01ac85e4f831dc1c523787ce6 as bail } from "./ia159fdc01ac85e4f831dc1c523787ce6.ts";
-import { loopFixture as fixture, git, onOrigin, turner } from "../test/harness.ts";
+import { loopFixture as fixture, git, moveHomeWhenScopePushed, onOrigin, turner } from "../test/harness.ts";
 
 test("keeps what the dive held on its ref, uncommitted work included, records why, leaves the checkout at its base, and ends it", async () => {
 	const f = fixture("bail");
@@ -17,7 +17,7 @@ test("keeps what the dive held on its ref, uncommitted work included, records wh
 	writeFileSync(join(f.checkout, "draft.md"), "half\n");
 
 	await bail({ reason: "a better idea came along" }, f.ctx);
-	const ref = `refs/nosedive/${f.heroId}/dives/${id}`;
+	const ref = f.diveRef(id);
 	assert.equal(git(f.checkout, "rev-parse", "HEAD"), base);
 	assert.equal(git(f.remote, "log", "-1", "--format=%s", ref), `pack(${id.slice(-6)}.ideas): work in progress`, "nothing it held is lost");
 	assert.equal(git(f.remote, "log", "-1", "--format=%(trailers:only,unfold)", ref), "Co-Authored-By: nosedive test <noreply@nosedive.dev>", "and says nosedive made it, once");
@@ -47,7 +47,7 @@ test("bails without atomic-push support at the origin", async () => {
 
 	await bail({ reason: "no longer needed" }, f.ctx);
 
-	assert.equal(f.remoteRef(`refs/nosedive/${f.heroId}/dives/${id}`), committed);
+	assert.equal(f.remoteRef(f.diveRef(id)), committed);
 	assert.throws(() => f.onDeck());
 });
 
@@ -88,7 +88,7 @@ test("refuses, changing nothing and throwing no turn away, when the home's copy 
 	await jump({ ref: f.featId }, f.ctx);
 	const t = await turner(f);
 	const origin = git(f.hero, "remote", "get-url", "origin");
-	await t.turn("One.", "First");
+	const turned = await t.turn("One.", "First");
 	onOrigin(f, (clone) => {
 		const path = join(clone, "kb", `${t.id}.md`);
 		writeFileSync(path, `${readFileSync(path, "utf8")}\nA note from elsewhere.\n`);
@@ -105,9 +105,54 @@ test("refuses, changing nothing and throwing no turn away, when the home's copy 
 	});
 
 	assert.equal(git(origin, "rev-parse", "refs/heads/main"), moved);
-	assert.equal(git(origin, "for-each-ref", "refs/nosedive"), "");
+	assert.equal(git(origin, "for-each-ref", "refs/nosedive"), `${turned} commit\t${f.diveRef(t.id)}`, "only what the turn pushed is on the origin");
 	assert.equal(git(f.hero, "symbolic-ref", "--short", "HEAD"), branch, "the dive is still on deck");
 	assert.equal(git(f.hero, "rev-parse", "HEAD"), head);
 	assert.equal(sections(f.doc(t.id), "First"), 1, "the turn is on the dive branch");
 	assert.equal(sections(f.doc(t.id), "bailed"), 0);
+});
+
+test("a home whose copy of the dive doc moves after the earlier pushes is reported as partly done, throwing no turn away; the rerun refuses the same way until the change is reverted, then finishes", async () => {
+	const f = fixture("bail-window");
+	await jump({ ref: f.featId }, f.ctx);
+	const t = await turner(f);
+	const origin = git(f.hero, "remote", "get-url", "origin");
+	await t.turn("One.", "First");
+	const committed = f.commit("idea.md", "an idea\n");
+	const ref = f.diveRef(t.id);
+	moveHomeWhenScopePushed(f, (clone) => {
+		const path = join(clone, "kb", `${t.id}.md`);
+		writeFileSync(path, `${readFileSync(path, "utf8")}\nA note from elsewhere.\n`);
+		git(clone, "commit", "-qam", "note on the dive");
+	});
+	const branch = git(f.hero, "symbolic-ref", "--short", "HEAD");
+	const message = () => {
+		const short = git(f.hero, "rev-parse", "--short", git(origin, "rev-parse", "refs/heads/main"));
+		return `kb/${t.id}.md on main changed since this dive began, by ${short} note on the dive, and part of the work is published already, so bail is only partly done. Published: data ${ref} at ${committed.slice(0, 7)}; hero ${ref} at ${git(origin, "rev-parse", ref).slice(0, 7)}. Not published: the record on main. Every turn is still on ${branch} and that change on main is untouched. Running \`nosedive bail --reason "stuck"\` again refuses the same way until that change is reverted on main: revert it, or ask whoever made it to, then run \`nosedive bail --reason "stuck"\` again to finish it`;
+	};
+
+	await assert.rejects(bail({ reason: "stuck" }, t.plain), (error: Error) => {
+		assert.equal(error.message, message());
+		return true;
+	});
+
+	const moved = git(origin, "rev-parse", "refs/heads/main");
+	assert.equal(git(origin, "log", "-1", "--format=%s", moved), "note on the dive", "the other edit is the home's tip, not overwritten");
+	assert.equal(git(f.hero, "symbolic-ref", "--short", "HEAD"), branch, "the dive is still on deck");
+	assert.equal(sections(git(f.hero, "show", `${branch}:kb/${t.id}.md`), "First"), 1, "the turn is on the dive branch");
+
+	await assert.rejects(bail({ reason: "stuck" }, t.plain), (error: Error) => {
+		assert.equal(error.message, message());
+		return true;
+	});
+	assert.equal(git(origin, "rev-parse", "refs/heads/main"), moved, "the rerun pushed nothing over the other edit");
+
+	onOrigin(f, (clone) => git(clone, "revert", "--no-edit", "HEAD"));
+	await bail({ reason: "stuck" }, t.plain);
+
+	const doc = git(origin, "show", `refs/heads/main:kb/${t.id}.md`);
+	assert.equal(sections(doc, "First"), 1, "the turn is in the record");
+	assert.equal(sections(doc, "bailed"), 1);
+	assert.equal(f.remoteRef(ref), committed, "the work is kept");
+	assert.throws(() => f.onDeck(), "nothing is held");
 });

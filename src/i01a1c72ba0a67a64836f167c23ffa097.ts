@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { constants, copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmdirSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, relative } from "node:path";
@@ -19,6 +20,9 @@ import { i01a1c72ba0c37d27a058e908481307c3 as runGit } from "./i01a1c72ba0c37d27
 
 /** Legacy's seeded id, which owns its dive kind, its copy of work's. */
 export const LEGACY_ID = "01a1b128-2c08-790f-80f4-e2c40a98bfcc";
+
+/** Work's seeded id, which owns work's dive kind and the cape segment of every dive ref and marker (work-owns-dive-refs): a dive has one ref per token, whichever of the two capes touched it. */
+export const WORK_ID = "01a15bb1-da9e-7d2d-aa82-5ee97257adc6";
 
 /** Whether a doc's scopes name a canonical owner for its kind: a dive legacy nosedive wrote names none. */
 function hasCanonical(doc: Doc): boolean {
@@ -217,6 +221,11 @@ export function carry(plan: Plan, command: string): void {
 	throw done.refusal.kind === "stale" && !/is checked out in/.test(done.refusal.detail) ? new Stale(message) : new Error(message);
 }
 
+/** Refuses, as stale, a home that moved since it was planned, judged on a fresh fetch taken just before the first push: nothing is pushed yet, so the command plans again. */
+export function assertHomeUnmoved(hero: Hero, up: Upstream, planned: Sha): void {
+	if (fetchHome(hero, up) !== planned) throw new Stale(`${up.remote}/${up.name} moved while this was being planned, so nothing was changed`);
+}
+
 /** Plans and carries out again from a fresh fetch while the commit finds the world moved, at most three times. */
 export async function replanning<T>(attempt: () => Promise<T> | T): Promise<T> {
 	for (let tries = 0; ; tries++) {
@@ -351,9 +360,83 @@ export function dropRenderSentinels(scopes: { name: string; dir: string }[], say
 	}
 }
 
-/** Where a dive's work is kept on each repo's origin, whichever checkout of the hero packs it. */
-export function diveRef(hero: Hero, diveId: string): string {
-	return `refs/nosedive/${hero.id}/dives/${diveId}`;
+/**
+ * Where a nosedive checkout puts anything on a repo's origin: `refs/nosedive/<owner>/<cape id>/<slug>` (nosedive-ref-scheme).
+ * The owner is the diver token as tokenOf makes it, the cape is work, and the slug is dotted, with no slash, so no ref can sit
+ * under another. Every ref is on origin; no nosedive ref is local only.
+ */
+export function ownedRef(owner: string, slug: string): string {
+	return `refs/nosedive/${owner}/${WORK_ID}/${slug}`;
+}
+
+/** Where a dive's work is kept in each repo, under the token of the checkout that holds the dive, which alone pushes it. */
+export function diveRef(token: string, diveId: string): string {
+	return ownedRef(token, `dive.${diveId}`);
+}
+
+/** The sha a ref holds on a repo's origin as it is now, null when it holds none; refuses when origin cannot be asked. */
+export function remoteSha(dir: string, ref: string): Sha | null {
+	const asked = runGit(dir, "ls-remote", "origin", ref);
+	if (!asked.ok) throw new Error(`cannot ask origin about ${ref} in ${dir}: ${asked.text}`);
+	return asked.text.split("\n").filter(Boolean).map((line) => line.split("\t") as [string, string]).find(([, each]) => each === ref)?.[0] ?? null;
+}
+
+/** Makes a commit a ref on origin holds present here, fetching it when it is not. */
+function haveCommit(dir: string, ref: string, sha: Sha): void {
+	if (!runGit(dir, "cat-file", "-e", `${sha}^{commit}`).ok) runGit(dir, "fetch", "-q", "origin", ref);
+}
+
+/** What a turn's push of the dive's committed work did: the repos whose dive ref it moved, why each other was not pushed, and the repos holding uncommitted changes, which it never backs up. */
+export type BackedUp = { pushed: string[]; refused: { name: string; why: string }[]; uncommitted: string[] };
+
+/**
+ * Pushes the dive's committed work to its ref in each writable scope's repo and then the hero's (turns-pushed-where), under the
+ * token of this checkout, which alone writes that ref: the push replaces it whatever it holds, a rebase included, and a crashed
+ * holder's checkout coming back writes its own ref and overwrites nothing of this one (nosedive-ref-scheme). It commits nothing,
+ * so uncommitted changes are named and left. A push that fails leaves what is committed where it is for the next turn, pack or
+ * land, and a scope that fails keeps the hero from being pushed, so the hero's ref never describes code its scopes' refs lack.
+ */
+export function backUp(dive: Dive): BackedUp {
+	const { hero } = dive;
+	const id = String(dive.doc.fm.id);
+	const own = diveRef(dive.token, id);
+	const repos = [
+		...dive.scopes.filter((scope) => scope.branch && scope.ours).map((scope) => ({ name: scope.name, dir: scope.dir, base: baseOf(scope) })),
+		{ name: "hero", dir: hero.dir, base: undefined },
+	];
+	const done: BackedUp = { pushed: [], refused: [], uncommitted: [] };
+	for (const repo of repos) {
+		if (runGit(repo.dir, "status", "--porcelain").text) done.uncommitted.push(repo.name);
+		if (repo.base === undefined && done.refused.length > 0) {
+			done.refused.push({ name: repo.name, why: "a scope's work was not pushed, and the hero's ref must not describe code its scopes' refs lack" });
+			continue;
+		}
+		try {
+			const tip = must(repo.dir, "rev-parse", "HEAD");
+			// A scope holding nothing its base lacks has no work to keep; the hero always holds the turn.
+			const there = remoteSha(repo.dir, own);
+			if (repo.base && must(repo.dir, "rev-list", "--count", `${repo.base}..${tip}`) === "0") {
+				// Work an earlier turn pushed, and the holder has since reset away, is not left advertised on origin.
+				if (there) {
+					const outcome = commitPlan({ steps: [{ repo: repo.name, dir: repo.dir, remote: { name: "origin", updates: [{ ref: own, old: there, new: null, fastForward: false }] } }] }, "turn");
+					if (!outcome.ok) done.refused.push({ name: repo.name, why: outcome.refusal.detail });
+				}
+				continue;
+			}
+			if (there !== tip) {
+				if (there) haveCommit(repo.dir, own, there);
+				const outcome = commitPlan({ steps: [{ repo: repo.name, dir: repo.dir, remote: { name: "origin", updates: [{ ref: own, old: there, new: tip, fastForward: false, publishes: diveWork(repo.dir, tip, there) }] } }] }, "turn");
+				if (!outcome.ok) {
+					done.refused.push({ name: repo.name, why: outcome.refusal.detail });
+					continue;
+				}
+			}
+			done.pushed.push(repo.name);
+		} catch (error) {
+			done.refused.push({ name: repo.name, why: (error as Error).message });
+		}
+	}
+	return done;
 }
 
 /** The subject of the commit pack makes of uncommitted work, which jump undoes. */
@@ -367,41 +450,87 @@ export function isWip(dive: Doc, subject: string): boolean {
 	return subject === `pack(${name}): work in progress` || /^(?:feat\([^)]*\): pack |pack: )work in progress on (.*)$/.exec(subject)?.[1] === name;
 }
 
-/** Whether a ref holds the dive's work, under its name now or before hero-dive-refs: a `dives` segment, the dive's id last. */
+/** Whether a ref holds the dive's work: under a token, `dive.<id>`, or under a name from before nosedive-ref-scheme, a `dives` segment and the dive's id last. */
 export function isDiveRef(ref: string, diveId: string): boolean {
-	return ref.includes("/dives/") && ref.endsWith(`/${diveId}`);
+	return ref.endsWith(`/dive.${diveId}`) || (ref.includes("/dives/") && ref.endsWith(`/${diveId}`));
 }
 
-/** Every ref of the dive on origin, under any name it was pushed to, newest first, as last fetched. */
-export function diveRefs(dir: string, diveId: string): { ref: string; sha: string }[] {
+/** Whether a dive's ref has a name from before nosedive-ref-scheme, which is still read and is deleted by the put-down that finds it. */
+export function isOldRef(ref: string, diveId: string): boolean {
+	return isDiveRef(ref, diveId) && !ref.endsWith(`/dive.${diveId}`);
+}
+
+/** Whether a ref is a marker a put-down of the dive left on origin, which the put-down deletes once it is done. */
+export function isMarkerRef(ref: string, diveId: string): boolean {
+	return new RegExp(`^refs/nosedive/[^/]+/[^/]+/(?:land|putdown)\\.${diveId}(?:\\.|$)`).test(ref);
+}
+
+/** The token a ref of the dive is under, when it has one. */
+export function tokenOfRef(ref: string): string | undefined {
+	return /^refs\/nosedive\/([0-9a-f]{12})\//.exec(ref)?.[1];
+}
+
+function remoteRefs(dir: string): { ref: string; sha: string }[] {
 	return runGit(dir, "ls-remote", "origin", "refs/nosedive/*")
 		.text.split("\n")
 		.filter(Boolean)
 		.map((line) => {
 			const [sha, ref] = line.split("\t") as [string, string];
 			return { ref, sha };
-		})
+		});
+}
+
+/** Every ref of the dive's work on origin, under any token or any name it was pushed to, newest first, as origin has them now. */
+export function diveRefs(dir: string, diveId: string): { ref: string; sha: string }[] {
+	return remoteRefs(dir)
 		.filter(({ ref }) => isDiveRef(ref, diveId))
 		.sort((a, b) => Number(runGit(dir, "log", "-1", "--format=%ct", b.sha).text || 0) - Number(runGit(dir, "log", "-1", "--format=%ct", a.sha).text || 0));
 }
 
-/** Where commits moved off are kept on this machine: outside `refs/nosedive`, which a fetch prunes to what origin holds. */
-const ORPHANS = "refs/nosedive-orphans";
-
-/** The commits `tip` holds that no branch or nosedive ref on origin does, as last fetched, nor a local orphan ref, by sha and subject. */
-export function unpushed(dir: string, tip = "HEAD"): string[] {
-	return runGit(dir, "log", "--format=%h %s", tip, "--not", "--remotes=origin", "--glob=refs/nosedive/*", `--glob=${ORPHANS}/*`).text.split("\n").filter(Boolean);
+/** The markers of the dive's put-down on origin, as it has them now. */
+export function diveMarkers(dir: string, diveId: string): { ref: string; sha: string }[] {
+	return remoteRefs(dir).filter(({ ref }) => isMarkerRef(ref, diveId));
 }
 
 /**
- * The local ref that keeps `tip` when moving off it would leave commits no ref on origin holds, and the move that makes it;
- * nothing when it holds none. Never pushed: an orphan is a person's commit made outside any dive (dive-work-is-the-divers).
+ * What a land marker of the dive holds on origin, whichever token pushed it, the token given first: a land that one checkout
+ * began is finished by the checkout that took the dive over, from the markers the first left (nosedive-ref-scheme). `slug` is
+ * what follows `land.<dive id>.`.
  */
-export function keepOrphans(hero: Hero, dir: string, tip: Sha): { ref: string; commits: string[]; move: LocalMove } | undefined {
+export function anyMarker(dir: string, diveId: string, token: string, slug: string): Sha | null {
+	const found = diveMarkers(dir, diveId).filter(({ ref }) => ref.endsWith(`/land.${diveId}.${slug}`));
+	return (found.find(({ ref }) => tokenOfRef(ref) === token) ?? found[0])?.sha ?? null;
+}
+
+/** Whether a land of the dive was begun and not finished, by any token: its markers are on origin in the hero or in a repo of the given remotes. */
+export function landBegun(hero: Hero, diveId: string, remotes: string[]): boolean {
+	return [undefined, ...remotes].some((url) => {
+		const listed = runGit(hero.dir, "ls-remote", url ?? "origin", "refs/nosedive/*");
+		return listed.ok && listed.text.split("\n").some((line) => new RegExp(`/land\\.${diveId}\\.`).test(line));
+	});
+}
+
+/** The commits `tip` holds that no branch or nosedive ref on origin does, as last fetched, by sha and subject. */
+export function unpushed(dir: string, tip = "HEAD"): string[] {
+	return runGit(dir, "log", "--format=%h %s", tip, "--not", "--remotes=origin", "--glob=refs/nosedive/*").text.split("\n").filter(Boolean);
+}
+
+/**
+ * Keeps `tip` in a git bundle in the hero's packs dir, beside the orphan packs, when moving off it would leave commits no ref on
+ * origin holds; nothing when it holds none. A bundle, not a ref: an orphan is a commit someone moved away from, sometimes on
+ * purpose, and no ref of it may reach origin (dive-work-is-the-divers). Written when it is planned, named by the tip, so a plan
+ * made again writes the same file.
+ */
+export function keepOrphans(hero: Hero, dir: string, name: string, tip: Sha): { path: string; tip: Sha; commits: string[] } | undefined {
 	const commits = unpushed(dir, tip);
 	if (commits.length === 0) return undefined;
-	const ref = `${ORPHANS}/${hero.id}/${tip}`;
-	return { ref, commits, move: { ref, old: runGit(dir, "rev-parse", "--verify", "-q", ref).text || null, new: tip } };
+	const path = join(packsDir(hero), "orphans", `${name}-${tip}.bundle`);
+	const prerequisites = runGit(dir, "rev-list", "--boundary", tip, "--not", "--remotes=origin", "--glob=refs/nosedive/*").text.split("\n").filter((line) => line.startsWith("-")).map((line) => line.slice(1));
+	const objects = spawnSync("git", ["pack-objects", "--revs", "--stdout"], { cwd: dir, input: `${[tip, ...prerequisites.map((sha) => `^${sha}`)].join("\n")}\n`, maxBuffer: 1 << 30 });
+	if (objects.status !== 0) throw new Error(`cannot bundle ${tip.slice(0, 7)} in ${dir}: ${String(objects.stderr).trim()}`);
+	mkdirSync(dirname(path), { recursive: true });
+	writeFileSync(path, Buffer.concat([Buffer.from(`# v2 git bundle\n${prerequisites.map((sha) => `-${sha}\n`).join("")}${tip} refs/orphans/${tip}\n\n`), objects.stdout]));
+	return { path, tip, commits };
 }
 
 
@@ -948,13 +1077,21 @@ export function movedLinks(doc: KbDoc, diveId: string, state: State): string | u
 	return `---\n${doc.yaml.toString({ lineWidth: 0 })}---\n${doc.body}`;
 }
 
-/** The turn commits in `from..to`: nosedive's own, each changing only the dive doc, as `pass --turn` makes them (turns-publish-when). */
+/**
+ * The turn commits in `from..to`, as `pass --turn` makes them (turns-publish-when): the subject `feat(<feat name>): pass turn`,
+ * or `pass: turn` when core found no feat to group it under, and a change to the dive doc only, which held-dive-doc-edits keeps
+ * to turns. Not the committer, which a rebase changes. The feat named is the one core groups the commit under, which for
+ * legacy's dives, no feats of their own, is not the dive's name, so any feat name is taken: only a turn changes the dive doc alone.
+ */
 export function turnCommits(hero: Hero, dive: Doc, from: Sha, to: Sha): string[] {
 	const rel = keyOf(hero, dive);
 	return ownedRange(hero.dir, from, to)
-		.filter((commit) => commit.own && !commit.merge && !isWip(dive, commit.subject) && runGit(hero.dir, "diff-tree", "--no-commit-id", "--name-only", "-r", commit.sha).text === rel)
+		.filter((commit) => /^(?:feat\([^)]*\): pass turn|pass: turn)$/.test(commit.subject) && !commit.merge && runGit(hero.dir, "diff-tree", "--no-commit-id", "--name-only", "-r", commit.sha).text === rel)
 		.map((commit) => commit.sha);
 }
+
+/** What a put-down already published when the home moved under it, what is still to publish, and the command that finishes it once the home allows. */
+export type Earlier = { published: string[]; unpublished: string[]; rerun: string };
 
 /**
  * The dive doc a put-down's record is built on: the dive branch's copy, which holds every turn, with the turns it holds. The
@@ -963,7 +1100,7 @@ export function turnCommits(hero: Hero, dive: Doc, from: Sha, to: Sha): string[]
  * its copy at the dive's base: it is fine unchanged, or when the dive's copy begins with it (this dive's own turns already on
  * the home, as a dive in flight before turns waited for put-down has), and otherwise refused, before anything is changed.
  */
-export function recordBase(hero: Hero, dive: Dive, homeTip: Sha, diveTip: Sha, command: string): { doc: KbDoc; turns: number } {
+export function recordBase(hero: Hero, dive: Dive, homeTip: Sha, diveTip: Sha, command: string, earlier?: () => Earlier | undefined): { doc: KbDoc; turns: number } {
 	const rel = keyOf(hero, dive.doc);
 	const mine = docAt(hero.dir, diveTip, rel);
 	const theirs = docAt(hero.dir, homeTip, rel);
@@ -971,6 +1108,9 @@ export function recordBase(hero: Hero, dive: Dive, homeTip: Sha, diveTip: Sha, c
 	const base = runGit(hero.dir, "merge-base", diveTip, `refs/heads/${dive.home}`).text || diveTip;
 	if (theirs.text !== docAt(hero.dir, base, rel)?.text && !mine.text.startsWith(theirs.text)) {
 		const moved = runGit(hero.dir, "log", "-1", "--format=%h %s", `${base}..${homeTip}`, "--", rel).text || homeTip.slice(0, 7);
+		// Some of the work is published already, by a run that was stopped when the home moved, so "nothing" would be false.
+		const partial = earlier?.();
+		if (partial) throw new Error(`${rel} on ${dive.home} changed since this dive began, by ${moved}, and part of the work is published already, so ${command} is only partly done. Published: ${partial.published.join("; ")}. Not published: ${partial.unpublished.join("; ")}. Every turn is still on ${dive.branch} and that change on ${dive.home} is untouched. Running \`nosedive ${partial.rerun}\` again refuses the same way until that change is reverted on ${dive.home}: revert it, or ask whoever made it to, then run \`nosedive ${partial.rerun}\` again to finish it`);
 		throw new Error(`${rel} on ${dive.home} changed since this dive began, by ${moved}, so nothing was ${command === "land" ? "landed" : "put down"} and every turn is still on ${dive.branch}: revert that change on ${dive.home}, or ask whoever made it to, then run \`nosedive ${command}\` again`);
 	}
 	// A gate report land left on the dive is a section of the doc too, but not a turn.
@@ -983,18 +1123,21 @@ export type PutDown = { puts: Put[]; refs: Map<string, string | undefined>; own:
 
 /**
  * Puts a dive down, for pack and bail, as one plan: uncommitted work held in a commit off to the side, the home replayed,
- * the record built, every conflict found; then each scope and, last, the hero push each ref under its own lease: work first,
- * deleted refs next and the record last, with local refs after them. The checkouts are left detached at their base and the hero on its
+ * the record built, every conflict found; then the put-down's marker, each scope and, last, the hero push each ref: work first,
+ * deleted refs next and the record last, the marker going with it, with local refs after them. The checkouts are left detached at their base and the hero on its
  * home, the dive branches gone, only once every push is done.
  */
-export function putDown(dive: Dive, version: string, command: string, record: (done: PutDown) => Change): Promise<PutDown> {
-	return replanning(() => putDownOnce(dive, version, command, record));
+export function putDown(dive: Dive, version: string, command: string, record: (done: PutDown) => Change, rerun = command): Promise<PutDown> {
+	return replanning(() => putDownOnce(dive, version, command, record, rerun));
 }
 
-function putDownOnce(dive: Dive, version: string, command: string, record: (done: PutDown) => Change): PutDown {
+function putDownOnce(dive: Dive, version: string, command: string, record: (done: PutDown) => Change, rerun: string): PutDown {
 	const { hero, home } = dive;
 	const id = String(dive.doc.fm.id);
-	const own = diveRef(hero, id);
+	// Only this checkout writes the ref under its token (nosedive-ref-scheme), so what it finds there is its own, whatever it holds.
+	const own = diveRef(dive.token, id);
+	// A bail ends the dive, so it clears the refs of any other token too; a pack leaves what is another checkout's alone.
+	const ends = command === "bail";
 	const up = homeUpstream(hero, home);
 	// Fetched so every dive ref's commit is here: diveRefs orders them by commit time.
 	const upstream = fetchHome(hero, up);
@@ -1008,11 +1151,7 @@ function putDownOnce(dive: Dive, version: string, command: string, record: (done
 		{ key: hero.id!, name: "hero", dir: hero.dir, base: `refs/heads/${home}`, recorded: heroRef(hero, dive.doc), commits: [] },
 	];
 
-	// Before a sha goes to the dive's own ref, this checkout writes down, locally, that it is about to: a retry that finds the
-	// ref there knows it was this command's, which ancestry of HEAD can never say.
-	const pushedRef = (_dir: string, sha: string) => `refs/nosedive-pushed/${hero.id}/${id}/${sha}`;
-	// What this command would hold is worked out first. The same state on the same parent is the same commit, so a retry
-	// recognises its own earlier publish by sha, and anything else on the dive's own ref is refused.
+	// What this command would hold is worked out first. The same state on the same parent is the same commit.
 	for (const put of puts) {
 		put.head0 = must(put.dir, "rev-parse", "HEAD");
 		put.dirty = !!runGit(put.dir, "status", "--porcelain").text;
@@ -1020,24 +1159,43 @@ function putDownOnce(dive: Dive, version: string, command: string, record: (done
 		put.commits = runGit(put.dir, "log", "--format=%h %s", `${put.base}..${put.tip}`).text.split("\n").filter(Boolean);
 		if (put.commits.length > 0) put.sha = put.tip;
 	}
-	// Every lease is checked before anything is committed or pushed, against what the dive doc recorded at its last jump
-	// or pack: local refs are no record, since any fetch into a repo's shared cache moves them. Each ref must hold the
-	// recorded commit or older work of the dive; the dive's own ref may also hold a commit this checkout has, its own
-	// earlier publish, so a retry goes on.
+	// Checked before anything is committed or pushed, against what the dive doc recorded at its last jump or pack: local refs are
+	// no record, since any fetch into a repo's shared cache moves them. A ref under another token is not this checkout's to judge
+	// or to overwrite, and the own ref is this checkout's. A ref under a name from before nosedive-ref-scheme must hold the
+	// recorded commit or older work of the dive, else it is someone else's.
 	const observed = new Map(puts.map((put) => [put.key, diveRefs(put.dir, id)]));
 	const within = (dir: string, sha: string, tip: string | undefined) => tip !== undefined && runGit(dir, "merge-base", "--is-ancestor", sha, tip).ok;
 	const moved = puts.flatMap((put) => {
 		const current = observed.get(put.key)!;
 		if (current.length === 0 && put.recorded !== undefined && put.sha) return [`${put.name}: the dive's ref is gone, which this dive did not see`];
 		return current.flatMap(({ ref, sha }) => {
-			if (within(put.dir, sha, put.recorded) || (ref === own && (sha === put.tip || sha === put.head0 || runGit(put.dir, "rev-parse", "--verify", "-q", pushedRef(put.dir, sha)).ok))) return [];
+			if (tokenOfRef(ref) !== undefined || within(put.dir, sha, put.recorded)) return [];
 			return [`${put.name}: ${ref} is at ${sha.slice(0, 7)}, which this dive did not see`];
 		});
 	});
 	if (moved.length > 0) throw new Error(`the dive's refs moved under it, so nothing was put down:\n  ${moved.join("\n  ")}`);
 
+	// The marker of a put-down in a repo: pushed on its own before the first update that changes what origin holds there, so a run
+	// that was stopped, or whose record the home then refuses, is told from one that never began, from any checkout. It points at
+	// the repo's tip, which it publishes with it, and goes with the record.
+	const heroPut = puts.find((put) => put.key === hero.id)!;
+	const markerRef = ownedRef(dive.token, `putdown.${id}`);
+	const markerNow = new Map(puts.map((put) => [put.key, diveMarkers(put.dir, id).find(({ ref }) => ref === markerRef)?.sha ?? null]));
 	// The record goes on the dive branch's copy of the dive doc, which holds every turn; refused before anything is pushed or moved.
-	const recorded = recordBase(hero, dive, homePlan.tip, puts.find((put) => put.key === hero.id)!.tip!, command);
+	// What an earlier run of this command published, as origin shows it: it began if its marker is there.
+	const earlier = (): Earlier | undefined => {
+		if (![...markerNow.values()].some((sha) => sha !== null)) return undefined;
+		const has = (put: Put) => put.sha !== undefined && observed.get(put.key)!.some(({ ref, sha }) => ref === own && sha === put.sha);
+		const held = puts.filter((put) => put.sha !== undefined);
+		const cleared = puts.filter((put) => put.sha === undefined && put.recorded !== undefined && observed.get(put.key)!.length === 0);
+		if (!held.some(has) && cleared.length === 0) return undefined;
+		return {
+			published: [...held.filter(has).map((put) => `${put.name} ${own} at ${put.sha!.slice(0, 7)}`), ...cleared.map((put) => `${put.name} its dive refs, deleted`)],
+			unpublished: [...held.filter((put) => !has(put)).map((put) => `${put.name} ${own}`), `the record on ${home}`],
+			rerun,
+		};
+	};
+	const recorded = recordBase(hero, dive, homePlan.tip, heroPut.tip!, command, earlier);
 	const done: PutDown = { puts, refs: new Map(puts.map((put) => [put.key, put.sha])), own, turns: recorded.turns };
 	const made = recordOn(hero, homePlan.tip, keyOf(hero, dive.doc), record(done), version, { base: recorded.doc });
 	const ignored = new Map(writable.map((scope) => [scope.repoId, seeIgnored(hero, scope.dir)]));
@@ -1045,6 +1203,7 @@ function putDownOnce(dive: Dive, version: string, command: string, record: (done
 	const branch = `refs/heads/${dive.branch}`;
 	const steps: Step[] = [];
 	const after: LocalStep[] = [];
+	const cleanup: Step[] = [];
 	for (const put of puts) {
 		const isHero = put.key === hero.id;
 		const seen = observed.get(put.key)!;
@@ -1053,24 +1212,34 @@ function putDownOnce(dive: Dive, version: string, command: string, record: (done
 			const there = seen.find(({ ref }) => ref === own);
 			if (there?.sha !== put.sha) updates.push({ ref: own, old: there?.sha ?? null, new: put.sha, fastForward: false, publishes: diveWork(put.dir, put.sha, there?.sha ?? null) });
 		}
-		for (const { ref, sha } of put.sha ? seen.filter((each) => each.ref !== own) : seen) updates.push({ ref, old: sha, new: null, fastForward: false });
-		if (isHero) updates.push(homeUpdate(homePlan, made.tip, [made.tip]));
+		// What goes: the refs under older names, and with no work to keep the own ref too; a bail also any other token's.
+		const goes = seen.filter(({ ref }) => (ref === own ? !put.sha : isOldRef(ref, id) || (ends && tokenOfRef(ref) !== undefined)));
+		for (const { ref, sha } of goes) updates.push({ ref, old: sha, new: null, fastForward: false });
+		// The hero's own ref is pushed by every turn, so only what is deleted there makes a put-down's earlier pushes worth a marker.
+		const marked = isHero ? goes.length > 0 || markerNow.get(put.key) !== null : updates.length > 0 || markerNow.get(put.key) !== null;
+		const there = markerNow.get(put.key)!;
+		if (marked && there !== put.tip) updates.unshift({ ref: markerRef, old: there, new: put.tip!, fastForward: false, publishes: diveWork(put.dir, put.tip!, there) });
+		if (isHero) {
+			updates.push(homeUpdate(homePlan, made.tip, [made.tip]));
+			if (marked) updates.push({ ref: markerRef, old: put.tip!, new: null, fastForward: false });
+		} else if (marked) cleanup.push({ repo: put.name, dir: put.dir, remote: { name: "origin", updates: [{ ref: markerRef, old: put.tip!, new: null, fastForward: false }] } });
 		const held = localDiveRefs(put.dir, id);
-		const moves: LocalMove[] = held.map(({ ref, sha }) => ({ ref, old: sha, new: put.sha && ref === own ? put.sha : null }));
+		const moves: LocalMove[] = held.flatMap(({ ref, sha }) => (ref === own ? [{ ref, old: sha, new: put.sha ?? null }] : goes.some((each) => each.ref === ref) ? [{ ref, old: sha, new: null }] : []));
 		if (put.sha && !held.some(({ ref }) => ref === own)) moves.push({ ref: own, old: null, new: put.sha });
 		if (put.dirty) moves.push({ ref: branch, old: put.head0!, new: put.tip! });
 		if (isHero) moves.push({ ref: `refs/heads/${home}`, old: homePlan.old, new: made.tip });
 		// The index catches up with the held work, the tree untouched, so the files can then follow.
-		const noted = runGit(put.dir, "for-each-ref", "--format=%(refname) %(objectname)", `refs/nosedive-pushed/${hero.id}/${id}`).text.split("\n").filter(Boolean).map((line) => line.split(" ") as [string, string]);
-		if (put.sha) steps.push({ repo: put.name, dir: put.dir, local: { moves: [{ ref: pushedRef(put.dir, put.sha), old: noted.find(([ref]) => ref === pushedRef(put.dir, put.sha!))?.[1] ?? null, new: put.sha }] } });
 		steps.push({ repo: put.name, dir: put.dir, ...(updates.length > 0 ? { remote: { name: "origin", updates } } : {}), local: { moves, ...(put.dirty ? { files: { from: put.tip!, to: put.tip!, index: put.tip! } } : {}) } });
-		const drop: LocalMove[] = [{ ref: branch, old: put.tip!, new: null }, ...noted.filter(([ref]) => !put.sha || ref !== pushedRef(put.dir, put.sha!)).map(([ref, sha]) => ({ ref, old: sha, new: null })), ...(put.sha ? [{ ref: pushedRef(put.dir, put.sha), old: put.sha, new: null }] : [])];
+		const drop: LocalMove[] = [{ ref: branch, old: put.tip!, new: null }];
 		if (isHero) after.push({ repo: put.name, dir: put.dir, local: { head: { from: { branch: dive.branch }, to: { branch: home } }, files: { from: put.tip!, to: made.tip }, drop } });
 		else {
 			const base = runGit(put.dir, "merge-base", put.tip!, put.base).text || must(put.dir, "rev-parse", put.base);
 			after.push({ repo: put.name, dir: put.dir, local: { head: { from: { branch: dive.branch }, to: { detached: base } }, files: { from: put.tip!, to: base }, drop } });
 		}
 	}
+	// The scopes' markers go last, once the record is on the home; one that is left is equal to what was published, so a rerun finds it done.
+	steps.push(...cleanup);
+	assertHomeUnmoved(hero, up, homePlan.upstream);
 	carry({ steps, after }, command);
 	for (const scope of writable) {
 		const found = ignored.get(scope.repoId)!;

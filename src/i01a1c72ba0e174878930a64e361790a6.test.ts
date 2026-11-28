@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { readFileSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { appendFileSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
@@ -160,11 +161,24 @@ test("pass --turn refuses a dive held by another worktree", async () => {
 	assert.equal(git(f.hero, "rev-parse", "HEAD"), head);
 });
 
-// A turn stays on the dive branch until land, pack or bail publishes it (turns-publish-when)
+// A turn is committed on the dive branch and pushed to the dive's ref, never to the home; land, pack and bail publish it in their record (turns-publish-when, turns-pushed-where, nosedive-ref-scheme)
 
 const heading = (text: string, label: string) => (text.match(new RegExp(`^## \\S+ ${label}$`, "gm")) ?? []).length;
+const refIn = (dir: string, ref: string) => spawnSync("git", ["rev-parse", "--verify", "-q", ref], { cwd: dir, encoding: "utf8" }).stdout.trim();
+/** Where another checkout's token would keep the dive's work in a repo. */
+const theirRef = (id: string) => `refs/nosedive/${"a".repeat(12)}/01a15bb1-da9e-7d2d-aa82-5ee97257adc6/dive.${id}`;
+/** A ref of someone else's, pushed from a scratch clone of a bare repo: a commit of its own. */
+function pushTheirs(f: { hero: string }, bare: string, ref: string, label: string): string {
+	const clone = join(f.hero, "..", `theirs-${label}`);
+	git(f.hero, "clone", "-q", bare, clone);
+	git(clone, "-c", "user.name=O", "-c", "user.email=o@example.com", "commit", "-q", "--allow-empty", "-m", `theirs ${label}`);
+	git(clone, "push", "-q", "origin", `HEAD:${ref}`);
+	return git(clone, "rev-parse", "HEAD");
+}
+/** Nothing of nosedive's is a local-only ref in a checkout: every root under refs/nosedive is a mirror of origin. */
+const localRoots = (dir: string) => git(dir, "for-each-ref", "--format=%(refname)").split("\n").filter((ref) => /^refs\/nosedive-/.test(ref));
 
-test("a turn is committed on the dive branch only, pushes nothing, says so, and leaves the hero's work in progress alone", async () => {
+test("a turn is committed on the dive branch and pushed to the dive's ref under its token, not to the home, says so, and leaves the hero's work in progress alone", async () => {
 	const f = await setup("home");
 	const origin = git(f.hero, "remote", "get-url", "origin");
 	const root = join(f.hero, "kb", `${f.heroId}.md`);
@@ -172,16 +186,21 @@ test("a turn is committed on the dive branch only, pushes nothing, says so, and 
 	writeFileSync(join(f.hero, "kb", "draft.md"), "half a thought\n");
 	const status = git(f.hero, "status", "--porcelain");
 	const base = git(f.hero, "rev-parse", "main");
+	const ref = f.diveRef(f.id);
+	assert.match(ref, /^refs\/nosedive\/[0-9a-f]{12}\/01a15bb1-da9e-7d2d-aa82-5ee97257adc6\/dive\.[0-9a-f-]{36}$/);
 
 	assert.equal(await f.run(["Implemented the gate.", "--label", "First"]), 0, f.err.join("\n"));
 	const turn = git(f.hero, "rev-parse", "HEAD");
-	assert.deepEqual(f.out.slice(-1), [`turn: ${turn.slice(0, 7)} committed on the dive branch only, not pushed; land, pack or bail publishes it`]);
-	assert.equal(f.err.join(""), "");
+	assert.deepEqual(f.out.slice(-1), [`turn: ${turn.slice(0, 7)} committed on the dive branch and pushed to its dive ref in hero; the home gets it only when land, pack or bail puts the dive down`]);
+	assert.equal(f.err.join("\n"), "warning: uncommitted changes in hero are not backed up: a turn pushes only what is committed");
 	assert.match(git(f.hero, "symbolic-ref", "--short", "HEAD"), /^nosedive-/, "the hero stays on the dive branch");
 	assert.equal(git(f.hero, "rev-list", "--count", `${base}..${turn}`), "1", "one commit on the dive branch");
 	assert.equal(git(f.hero, "rev-parse", "main"), base, "the home did not move");
-	assert.equal(git(origin, "rev-parse", "refs/heads/main"), base, "nothing was pushed");
-	assert.equal(git(f.hero, "rev-parse", "refs/remotes/origin/main"), base);
+	assert.equal(git(origin, "rev-parse", "refs/heads/main"), base, "nothing was pushed to the home");
+	assert.equal(git(origin, "rev-parse", ref), turn, "the dive's ref holds the turn");
+	assert.equal(git(origin, "for-each-ref", "refs/heads"), `${base} commit\trefs/heads/main`, "and no branch was made");
+	assert.deepEqual(localRoots(f.hero), [], "no ref is local only");
+	assert.equal(f.remoteRef(ref), "", "the scope has no work to push");
 	assert.equal(git(f.hero, "diff-tree", "--no-commit-id", "--name-only", "-r", turn), `kb/${f.id}.md`, "only the dive doc changed");
 	assert.equal(heading(git(f.hero, "show", `${turn}:kb/${f.id}.md`), "First"), 1);
 	assert.equal(heading(git(f.hero, "show", `main:kb/${f.id}.md`), "First"), 0, "the home's copy has no turn");
@@ -189,32 +208,340 @@ test("a turn is committed on the dive branch only, pushes nothing, says so, and 
 	assert.match(readFileSync(root, "utf8"), /edited, not staged\n$/);
 });
 
-test("a turn does not reach for its upstream, so one that is unreachable or refuses pushes says nothing", async () => {
+test("a turn whose push is refused or offline keeps what is committed and warns; the next turn pushes it", async () => {
 	const f = await setup("no-push");
 	const origin = git(f.hero, "remote", "get-url", "origin");
 	const base = git(f.hero, "rev-parse", "main");
-	writeFileSync(join(origin, "hooks", "pre-receive"), "#!/bin/sh\necho protected >&2\nexit 1\n", { mode: 0o755 });
+	const ref = f.diveRef(f.id);
+	const hook = join(origin, "hooks", "pre-receive");
+	writeFileSync(hook, "#!/bin/sh\necho protected >&2\nexit 1\n", { mode: 0o755 });
 	assert.equal(await f.run(["Refused.", "--label", "First"]), 0, f.err.join("\n"));
+	assert.match(f.err.join("\n"), /warning: hero was not pushed to its dive ref \(.*protected.*\); its committed work stays on the dive branch, and a later turn, pack or land pushes it/);
+	assert.equal(refIn(origin, ref), "", "nothing was pushed");
+
+	unlinkSync(hook);
+	const here = git(f.hero, "remote", "get-url", "origin");
 	git(f.hero, "remote", "set-url", "origin", join(f.hero, "..", "missing.git"));
+	f.err.length = 0;
 	assert.equal(await f.run(["Offline.", "--label", "Second"]), 0, f.err.join("\n"));
+	assert.match(f.err.join("\n"), /warning: hero was not pushed to its dive ref/);
+	assert.match(f.out.slice(-1)[0]!, /committed on the dive branch, not pushed;/);
+
+	git(f.hero, "remote", "set-url", "origin", here);
+	f.err.length = 0;
+	assert.equal(await f.run(["Online.", "--label", "Third"]), 0, f.err.join("\n"));
 	assert.equal(f.err.join(""), "", "nothing to warn of");
+	const tip = git(f.hero, "rev-parse", "HEAD");
+	assert.equal(git(origin, "rev-parse", ref), tip, "the next turn pushed what the earlier ones left");
+	assert.equal(git(origin, "rev-list", "--count", `${base}..${ref}`), "3");
 	assert.equal(git(origin, "rev-parse", "refs/heads/main"), base);
-	assert.equal(git(f.hero, "rev-parse", "main"), base);
-	assert.equal(git(f.hero, "rev-list", "--count", `${base}..HEAD`), "2");
 });
 
-test("a core that gives gates no committed hook still says the turn is on the dive branch only", async () => {
+test("a turn pushes each scope's committed work to its dive ref and warns of uncommitted changes, which it never commits", async () => {
+	const f = await setup("scopes");
+	const ref = f.diveRef(f.id);
+	const committed = f.commit("idea.md", "an idea\n");
+	writeFileSync(join(f.checkout, "draft.md"), "unfinished\n");
+	assert.equal(await f.run(["One.", "--label", "First"]), 0, f.err.join("\n"));
+	assert.equal(f.remoteRef(ref), committed, "the scope's committed work is on its dive ref");
+	assert.equal(f.remoteRef("refs/heads/work/ideas"), "", "and not on its work branch");
+	assert.deepEqual(f.out.slice(-1), [`turn: ${git(f.hero, "rev-parse", "--short", "HEAD")} committed on the dive branch and pushed to its dive ref in data, hero; the home gets it only when land, pack or bail puts the dive down`]);
+	assert.equal(f.err.join("\n"), "warning: uncommitted changes in data are not backed up: a turn pushes only what is committed");
+	assert.equal(git(f.checkout, "rev-parse", "HEAD"), committed, "no work-in-progress commit was made");
+	assert.equal(git(f.checkout, "status", "--porcelain"), "?? draft.md");
+	assert.equal(git(f.remote, "ls-tree", "--name-only", ref).includes("draft.md"), false);
+	f.err.length = 0;
+	git(f.checkout, "add", "-A");
+	git(f.checkout, "commit", "-q", "-m", "add draft.md");
+	assert.equal(await f.run(["Two.", "--label", "Second"]), 0, f.err.join("\n"));
+	assert.equal(f.err.join(""), "", "nothing uncommitted, nothing to warn of");
+	assert.equal(f.remoteRef(ref), git(f.checkout, "rev-parse", "HEAD"), "the committed draft follows with the next turn");
+});
+
+test("a failed scope push leaves the hero unpushed, so its ref never describes code its scope's lacks; the next turn pushes both", async () => {
+	const f = await setup("scope-fails");
+	const origin = git(f.hero, "remote", "get-url", "origin");
+	const ref = f.diveRef(f.id);
+	const hook = join(f.remote, "hooks", "pre-receive");
+	writeFileSync(hook, "#!/bin/sh\necho scope protected >&2\nexit 1\n", { mode: 0o755 });
+	const committed = f.commit("idea.md", "an idea\n");
+	assert.equal(await f.run(["One.", "--label", "First"]), 0, f.err.join("\n"));
+	assert.match(f.err.join("\n"), /warning: data was not pushed to its dive ref \(.*scope protected.*\)/);
+	assert.match(f.err.join("\n"), /warning: hero was not pushed to its dive ref \(a scope's work was not pushed, and the hero's ref must not describe code its scopes' refs lack\)/);
+	assert.equal(refIn(origin, ref), "", "the hero is not pushed");
+	assert.equal(f.remoteRef(ref), "");
+	assert.equal(heading(git(f.hero, "show", `HEAD:kb/${f.id}.md`), "First"), 1, "the turn is committed");
+
+	unlinkSync(hook);
+	f.err.length = 0;
+	assert.equal(await f.run(["Two.", "--label", "Second"]), 0, f.err.join("\n"));
+	assert.equal(f.err.join(""), "");
+	assert.equal(f.remoteRef(ref), committed);
+	assert.equal(git(origin, "rev-parse", ref), git(f.hero, "rev-parse", "HEAD"));
+});
+
+test("a turn after a rebase force-pushes its own ref", async () => {
+	const f = await setup("rebase-turn");
+	const ref = f.diveRef(f.id);
+	const first = f.commit("idea.md", "an idea\n");
+	assert.equal(await f.run(["One.", "--label", "First"]), 0, f.err.join("\n"));
+	assert.equal(f.remoteRef(ref), first);
+	git(f.checkout, "commit", "-q", "--amend", "-m", "an idea, reworded");
+	const rewritten = git(f.checkout, "rev-parse", "HEAD");
+	assert.notEqual(rewritten, first);
+	assert.equal(spawnSync("git", ["merge-base", "--is-ancestor", first, rewritten], { cwd: f.checkout }).status, 1, "no longer a fast-forward");
+	assert.equal(await f.run(["Two.", "--label", "Second"]), 0, f.err.join("\n"));
+	assert.equal(f.err.join(""), "");
+	assert.equal(f.remoteRef(ref), rewritten, "the rebased work replaced the old");
+});
+
+test("pack after a rebase that followed a turn's push succeeds, replacing the ref the turn left", async () => {
+	const f = await setup("rebase-pack");
+	const ref = f.diveRef(f.id);
+	const first = f.commit("idea.md", "an idea\n");
+	assert.equal(await f.run(["One.", "--label", "First"]), 0, f.err.join("\n"));
+	assert.equal(f.remoteRef(ref), first);
+	git(f.checkout, "commit", "-q", "--amend", "-m", "an idea, reworded");
+	const rewritten = git(f.checkout, "rev-parse", "HEAD");
+
+	await pack({}, f.plain);
+
+	assert.equal(f.remoteRef(ref), rewritten, "the rebased work is what the pack kept");
+	assert.equal(git(f.hero, "symbolic-ref", "--short", "HEAD"), "main");
+	assert.throws(() => f.onDeck(), "nothing is held");
+});
+
+test("a second holder's checkout, under another token, pushes only its own ref: a turn and a pack overwrite nothing of its", async () => {
+	const f = await setup("second-holder");
+	const origin = git(f.hero, "remote", "get-url", "origin");
+	const ref = f.diveRef(f.id);
+	const first = f.commit("idea.md", "an idea\n");
+	assert.equal(await f.run(["One.", "--label", "First"]), 0, f.err.join("\n"));
+	// Another checkout of the same cache repo holds the dive under its token, and keeps its own ref.
+	const theirs = pushTheirs(f, f.remote, theirRef(f.id), "data");
+	const theirHero = pushTheirs(f, origin, theirRef(f.id), "hero");
+
+	const more = f.commit("more.md", "more\n");
+	f.err.length = 0;
+	assert.equal(await f.run(["Two.", "--label", "Second"]), 0, f.err.join("\n"));
+	assert.equal(f.err.join(""), "", "its push is not refused by theirs");
+	assert.equal(f.remoteRef(ref), more, "this checkout's ref follows its work");
+	assert.equal(f.remoteRef(theirRef(f.id)), theirs, "theirs is as they left it");
+	assert.equal(git(origin, "rev-parse", theirRef(f.id)), theirHero);
+	assert.notEqual(first, more);
+
+	await pack({}, f.plain);
+	assert.equal(f.remoteRef(ref), more);
+	assert.equal(f.remoteRef(theirRef(f.id)), theirs, "a pack leaves it too");
+	assert.equal(git(origin, "rev-parse", theirRef(f.id)), theirHero);
+});
+
+test("a pack of turns already on the dive ref keeps one record and does not double them on its ref", async () => {
+	const f = await setup("pack-after-turns");
+	const origin = git(f.hero, "remote", "get-url", "origin");
+	const base = git(f.hero, "rev-parse", "main");
+	const ref = f.diveRef(f.id);
+	const code = f.commit("idea.md", "an idea\n");
+	assert.equal(await f.run(["One.", "--label", "First"]), 0, f.err.join("\n"));
+	assert.equal(await f.run(["Two.", "--label", "Second"]), 0, f.err.join("\n"));
+	const tip = git(f.hero, "rev-parse", "HEAD");
+	assert.equal(git(origin, "rev-parse", ref), tip, "both turns are on the ref before the pack");
+
+	await pack({}, f.plain);
+
+	assert.equal(git(origin, "rev-parse", ref), tip, "the ref is where the turns left it");
+	assert.equal(git(origin, "rev-list", "--count", `${base}..${ref}`), "2", "each turn once");
+	assert.equal(f.remoteRef(ref), code);
+	const doc = git(origin, "show", `refs/heads/main:kb/${f.id}.md`);
+	assert.equal(heading(doc, "First"), 1);
+	assert.equal(heading(doc, "Second"), 1);
+	assert.match(doc, /\n- turns: 2$/);
+	assert.equal(git(origin, "rev-list", "--count", `${base}..refs/heads/main`), "1", "one record commit");
+	assert.equal(git(origin, "for-each-ref", "refs/nosedive", "--format=%(refname)"), ref, "no marker is left");
+	assert.deepEqual(localRoots(f.hero), []);
+	assert.deepEqual(localRoots(f.checkout), []);
+});
+
+test("a land of turns already on the dive ref deletes the dive's refs under every token and its markers, leaving each section once", async () => {
+	const f = await setup("land-after-turns");
+	const origin = git(f.hero, "remote", "get-url", "origin");
+	const ref = f.diveRef(f.id);
+	f.commit("idea.md", "an idea\n");
+	assert.equal(await f.run(["One.", "--label", "First"]), 0, f.err.join("\n"));
+	assert.equal(await f.run(["Two.", "--label", "Second"]), 0, f.err.join("\n"));
+	pushTheirs(f, f.remote, theirRef(f.id), "data");
+	pushTheirs(f, origin, theirRef(f.id), "hero");
+	assert.notEqual(git(origin, "rev-parse", ref), "");
+
+	await land({}, f.plain);
+
+	const doc = git(origin, "show", `refs/heads/main:kb/${f.id}.md`);
+	assert.equal(heading(doc, "First"), 1);
+	assert.equal(heading(doc, "Second"), 1);
+	assert.equal(git(origin, "for-each-ref", "refs/nosedive"), "", "the dive's refs and the markers are gone");
+	assert.equal(git(f.remote, "for-each-ref", "refs/nosedive"), "");
+	assert.deepEqual(localRoots(f.hero), []);
+	assert.deepEqual(localRoots(f.checkout), []);
+});
+
+test("a land after a rebase that followed a turn's push is not refused for the ref the turn left", async () => {
+	const f = await setup("land-rebase");
+	const ref = f.diveRef(f.id);
+	const first = f.commit("idea.md", "an idea\n");
+	assert.equal(await f.run(["One.", "--label", "First"]), 0, f.err.join("\n"));
+	assert.equal(f.remoteRef(ref), first);
+	git(f.checkout, "commit", "-q", "--amend", "-m", "an idea, reworded");
+
+	await land({}, f.plain);
+
+	assert.equal(f.remoteRef(ref), "", "the dive's ref is gone");
+	assert.notEqual(f.remoteRef("refs/heads/work/ideas"), "", "the work landed");
+});
+
+test("a land interrupted after its markers are pushed is finished by a rerun with no local state, from the markers on origin", async () => {
+	const f = await setup("land-markers");
+	const origin = git(f.hero, "remote", "get-url", "origin");
+	f.commit("idea.md", "an idea\n");
+	assert.equal(await f.run(["One.", "--label", "First"]), 0, f.err.join("\n"));
+	// A ref of the older shape the land cannot delete, so it stops after the record is pushed.
+	const old = `refs/nosedive/${f.heroId}/dives/${f.id}`;
+	git(origin, "update-ref", old, git(f.hero, "rev-parse", "HEAD"));
+	const hook = join(origin, "hooks", "pre-receive");
+	writeFileSync(hook, `#!/bin/sh\nwhile read old new ref; do\n  if [ "$new" = "${"0".repeat(40)}" ] && [ "$ref" = "${old}" ]; then\n    echo "injected deletion failure" >&2\n    exit 1\n  fi\ndone\nexit 0\n`, { mode: 0o755 });
+
+	await assert.rejects(land({}, f.plain), /injected deletion failure/);
+	const markers = git(origin, "for-each-ref", "--format=%(refname)", "refs/nosedive").split("\n").filter((ref) => /\/land\./.test(ref));
+	assert.equal(markers.length, 2, "the record's and the dive tip's markers are on origin");
+	assert.match(git(f.remote, "for-each-ref", "--format=%(refname)", "refs/nosedive"), /\/land\.[0-9a-f-]{36}\.[0-9a-f-]{36}\.tip/, "and the scope's, in the scope's origin");
+	assert.deepEqual(localRoots(f.hero), []);
+	assert.deepEqual(localRoots(f.checkout), []);
+	// Nothing local remembers the run: every mirror of origin's refs is gone.
+	for (const dir of [f.hero, f.checkout]) {
+		for (const ref of git(dir, "for-each-ref", "--format=%(refname)", "refs/nosedive").split("\n").filter(Boolean)) git(dir, "update-ref", "-d", ref);
+	}
+	unlinkSync(hook);
+
+	await land({}, f.plain);
+
+	const doc = git(origin, "show", `refs/heads/main:kb/${f.id}.md`);
+	assert.equal(heading(doc, "First"), 1);
+	assert.equal(heading(doc, "landed"), 1, "no second record");
+	assert.equal(git(origin, "for-each-ref", "refs/nosedive"), "", "the cleanup finished, the markers with it");
+	assert.equal(git(f.remote, "for-each-ref", "refs/nosedive"), "");
+	assert.equal(git(f.remote, "rev-list", "--count", "refs/heads/main..refs/heads/work/ideas"), "1", "the work was not stamped twice");
+	assert.throws(() => f.onDeck(), "the dive is over");
+});
+
+test("jump and land take the work of the token that holds the dive over another token's newer ref", async () => {
+	const f = await setup("holder-ref");
+	const origin = git(f.hero, "remote", "get-url", "origin");
+	const code = f.commit("idea.md", "an idea\n");
+	assert.equal(await f.run(["One.", "--label", "First"]), 0, f.err.join("\n"));
+	await pack({}, f.plain);
+	// Another token's ref, newer than the pack's, with other work in it.
+	const theirs = pushTheirs(f, f.remote, theirRef(f.id), "data");
+	assert.notEqual(theirs, code);
+
+	await jump({ ref: f.id }, f.plain);
+	assert.equal(git(f.checkout, "rev-parse", "HEAD"), code, "the dive's work is its holder's, not the newer ref's");
+	assert.equal(f.remoteRef(theirRef(f.id)), theirs, "and the other ref is left as it was");
+
+	await land({}, f.plain);
+	assert.equal(git(origin, "for-each-ref", "refs/nosedive"), "");
+	assert.equal(f.remoteRef(theirRef(f.id)), "", "a land deletes the dive's refs under every token");
+	assert.equal(git(f.remote, "rev-parse", "refs/heads/work/ideas^"), git(f.remote, "rev-parse", "refs/heads/main"), "and lands the holder's work");
+	assert.notEqual(git(f.remote, "show", "refs/heads/work/ideas:idea.md"), "");
+});
+
+test("a dive packed under the name from before the ref scheme jumps and lands", async () => {
+	const f = await setup("old-name");
+	const origin = git(f.hero, "remote", "get-url", "origin");
+	const ref = f.diveRef(f.id);
+	const old = `refs/nosedive/${f.heroId}/dives/${f.id}`;
+	const code = f.commit("idea.md", "an idea\n");
+	assert.equal(await f.run(["One.", "--label", "First"]), 0, f.err.join("\n"));
+	await pack({}, f.plain);
+	git(f.remote, "update-ref", old, code);
+	git(f.remote, "update-ref", "-d", ref);
+	git(origin, "update-ref", old, git(origin, "rev-parse", ref));
+	git(origin, "update-ref", "-d", ref);
+
+	await jump({ ref: f.id }, f.plain);
+	assert.equal(git(f.checkout, "rev-parse", "HEAD"), code, "the work comes back from the old name");
+	await land({}, f.plain);
+
+	assert.equal(git(origin, "for-each-ref", "refs/nosedive"), "", "the old ref goes with the dive");
+	assert.equal(f.remoteRef(old), "");
+	assert.notEqual(f.remoteRef("refs/heads/work/ideas"), "", "the work landed");
+	assert.throws(() => f.onDeck(), "the dive is over");
+});
+
+test("a jump from another checkout picks the dive up from the refs of the token that packed it, and its turns go under its own token", async () => {
+	const f = await setup("pickup");
+	const origin = git(f.hero, "remote", "get-url", "origin");
+	const ref = f.diveRef(f.id);
+	const code = f.commit("idea.md", "an idea\n");
+	assert.equal(await f.run(["One.", "--label", "First"]), 0, f.err.join("\n"));
+	await pack({}, f.plain);
+	const packed = git(origin, "rev-parse", ref);
+	assert.equal(f.remoteRef(ref), code);
+
+	// A clone, not a worktree: it shares no refs, so jump finds the dive through what it fetches.
+	const other = join(f.hero, "..", "other-clone");
+	git(f.hero, "clone", "-q", origin, other);
+	git(other, "config", "user.name", "Work Test");
+	git(other, "config", "user.email", "diver@example.com");
+	appendFileSync(join(other, ".git", "info", "exclude"), "workspace/\n");
+	const there = { ...f.ctx, cwd: other };
+	await jump({ ref: f.id }, { ...there, capes: f.plain.capes });
+	const theirs = join(other, "workspace", "data");
+	assert.equal(git(theirs, "rev-parse", "HEAD"), code, "the scope's committed work is picked up");
+	assert.equal(heading(readFileSync(join(other, "kb", `${f.id}.md`), "utf8"), "First"), 1, "the turn came with the pack's record, once");
+	assert.deepEqual(localRoots(other), []);
+
+	writeFileSync(join(theirs, "more.md"), "more\n");
+	git(theirs, "add", "-A");
+	git(theirs, "commit", "-q", "-m", "add more.md");
+	f.err.length = 0;
+	assert.equal(await launch(["pass", "--turn", f.id, "Two.", "--label", "Second"], there), 0, f.err.join("\n"));
+	assert.equal(f.err.join(""), "");
+	const mine = f.diveRef(f.id, other);
+	assert.notEqual(mine, ref, "another checkout holds it under another token");
+	assert.equal(f.remoteRef(mine), git(theirs, "rev-parse", "HEAD"));
+	assert.equal(git(origin, "rev-parse", mine), git(other, "rev-parse", "HEAD"));
+	assert.equal(git(origin, "rev-parse", ref), packed, "the first checkout's ref is as the pack left it");
+});
+
+test("the loop's code names no ref outside refs/nosedive/", () => {
+	for (const file of ["i01a1c72ba0a67a64836f167c23ffa097", "i0e2024913efd5dc8afe194f5650bda20", "i5f74ee87748f528b9fd9b00a48c2275b", "ia159fdc01ac85e4f831dc1c523787ce6", "i3b8461aa9eac5f10837c2515b5231e78", "i01a1c72ba0e174878930a64e361790a6"]) {
+		const text = readFileSync(new URL(`./${file}.ts`, import.meta.url), "utf8");
+		assert.doesNotMatch(text, /refs\/nosedive-/, file);
+	}
+});
+
+test("a core that gives gates no committed hook still says the turn is on the dive branch, not pushed", async () => {
 	const f = await setup("old-core");
 	const cape = f.ctx.capes[1]!;
 	const key = namespacedUuid(TURN, cape.id);
 	const real = cape.index[key] as typeof turn;
 	cape.index[key] = ((call: Parameters<typeof turn>[0]) => real({ ...call, gate: { ...call.gate!, committed: undefined } })) as never;
 	const base = git(f.hero, "rev-parse", "main");
+	const origin = git(f.hero, "remote", "get-url", "origin");
 	assert.equal(await f.run(["Old.", "--label", "First"]), 0, f.err.join("\n"));
-	assert.match(f.out.join("\n"), /turn: committed on the dive branch only, not pushed; land, pack or bail publishes it/);
+	assert.match(f.out.join("\n"), /turn: committed on the dive branch, not pushed: this core gives gates no commit hook; pack or land pushes it/);
 	assert.equal(f.err.join(""), "");
 	assert.equal(git(f.hero, "rev-parse", "main"), base);
+	assert.equal(git(origin, "for-each-ref", "refs/nosedive"), "", "nothing was pushed");
 	assert.equal(heading(git(f.hero, "show", `HEAD:kb/${f.id}.md`), "First"), 1);
+});
+
+test("help for pass --turn, jump, pack, land and bail says where turns live, and that uncommitted changes are not backed up", () => {
+	for (const doc of ["01a1c72b-a0d2-7947-83de-8f2dd490283a", "01a1c72b-a06b-7cfd-9e5f-710dc60e4a37", "01a1c72b-a079-7d52-baaa-1a9bba46a525", "01a1c72b-a097-7036-ae1a-496002396328", "01a1c72b-a088-715d-a4fe-90ea388bb097"]) {
+		const body = readFileSync(new URL(`../kb/${doc}.md`, import.meta.url), "utf8");
+		const usage = /(?:^|\n)## Usage\n([\s\S]*?)(?=\n## |$)/.exec(body)![1]!;
+		assert.match(usage, /Turns live on the dive branch and its dive ref, and reach the home only when land, pack or bail puts the dive down/, doc);
+		assert.match(usage, /uncommitted changes are not backed up/i, doc);
+	}
 });
 
 test("two turns then a land: the one record it pushes holds each section once, counts the turns, and no turn is its own commit on the home", async () => {

@@ -304,7 +304,7 @@ test("jump, pack, bail and land drop a render sentinel from a scope's checkout b
 	blockPush(f.checkout, LAND_ONLY);
 	await pack({}, f.ctx);
 	assert.ok(f.err.includes(`data: removed legacy nosedive's land-only pushurl (${LAND_ONLY}) from its worktree config`));
-	assert.equal(f.remoteRef(`refs/nosedive/${f.heroId}/dives/${id}`), committed, "pack pushed the work to origin");
+	assert.equal(f.remoteRef(f.diveRef(id)), committed, "pack pushed the work to origin");
 
 	// A reused checkout: jump drops it, though nothing would push until land.
 	blockPush(f.checkout, READ_ONLY);
